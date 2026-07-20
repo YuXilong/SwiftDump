@@ -1,25 +1,78 @@
+# SwiftDump
 
-#### SwiftDump
+中文（默认） | [English](./README_EN.md)
 
-##### [中文文档](./README_zh.md)
+[![Release](https://img.shields.io/github/v/release/YuXilong/SwiftDump?display_name=tag)](https://github.com/YuXilong/SwiftDump/releases/latest)
+![Swift](https://img.shields.io/badge/Swift-6-orange.svg)
+![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-SwiftDump is a command-line tool for retrieving Swift object information from Mach-O files. Similar to [class-dump](https://github.com/nygard/class-dump/), SwiftDump focuses on Swift 5 and Swift 6 metadata. For Mach-O files mixed with Objective-C and Swift, you can combine class-dump with SwiftDump.
+SwiftDump 是一个从 Mach-O 文件中恢复 Swift 类型定义的命令行工具，定位类似 Objective-C 的 [class-dump](https://github.com/nygard/class-dump/)。它可以离线解析 Swift 5 / Swift 6 metadata；对于 Objective-C 与 Swift 混编程序，可以配合 class-dump 使用。
 
-There is alos a [Frida](https://www.frida.re/) version named [FridaSwiftDump](https://github.com/neil-wu/FridaSwiftDump/).
+| 工具 | 输入 | 适用场景 |
+| --- | --- | --- |
+| **SwiftDump** | 本地 Mach-O 文件 | 离线分析、自动化处理、无需启动目标 App |
+| [FridaSwiftDump](https://github.com/neil-wu/FridaSwiftDump/) | 正在前台运行的 App | 运行时分析，需要 Frida 环境 |
 
-You can either use`SwiftDump` for a Mach-O file or `FridaSwiftDump` for a foreground running app.
+![SwiftDump 输出示例](./Doc/img_demo_result.jpg)
 
-If you are curious about the Mach-O format, check the image at the bottom of this article.
+## 下载与快速开始
 
-![demo](./Doc/img_demo_result.jpg)
+推荐从 [GitHub Releases](https://github.com/YuXilong/SwiftDump/releases) 下载最新版本。
 
-#### Usage
+当前正式版本：[SwiftDump v1.0.0](https://github.com/YuXilong/SwiftDump/releases/tag/v1.0.0)
 
-``` Text
+发布包包含 arm64 与 x86_64 Universal CLI、中英文文档、许可证和构建信息。Release 页面同时提供完整构建日志、回归日志及 `SHA256SUMS`。
+
+```sh
+curl -LO https://github.com/YuXilong/SwiftDump/releases/download/v1.0.0/SwiftDump-v1.0.0-macos-universal.zip
+curl -LO https://github.com/YuXilong/SwiftDump/releases/download/v1.0.0/SHA256SUMS
+shasum -a 256 SwiftDump-v1.0.0-macos-universal.zip
+unzip SwiftDump-v1.0.0-macos-universal.zip
+cd SwiftDump-v1.0.0-macos-universal
+chmod +x SwiftDump
+./SwiftDump --version
+```
+
+将 `shasum` 输出与 `SHA256SUMS` 中对应条目比对后再运行。
+
+> 发布二进制使用 linker ad hoc signature，尚未经过 Apple notarization。如果文件带有浏览器下载隔离属性，macOS 可能要求你在“系统设置 → 隐私与安全性”中确认运行。
+
+## 功能
+
+- 恢复 Swift 5 / Swift 6 的 `struct`、`class`、`actor`、`enum` 和 `protocol` 定义。
+- 解析 payload / payloadless enum case，以及字段 `let` / `var`、`indirect case` 标志。
+- 恢复类继承、协议继承和协议遵循关系。
+- 按 Swift 6.3.3 metadata ABI 解析 descriptor、conformance 和 field records。
+- 安全处理 signed relative pointer、direct / indirect pointer。
+- 支持现代 Mach-O `LC_DYLD_CHAINED_FIXUPS` userland rebase / bind，包括常见 arm64e authenticated pointer。
+- 识别新版 symbolic mangled-name reference 与 Embedded Swift `$e` 前缀。
+- 对截断、损坏或越界 Mach-O 数据安全失败，不直接崩溃。
+
+SwiftDump 会调用公开的 Swift runtime demangler，因此可以恢复复杂的泛型类型，例如：
+
+```swift
+RxSwift.Queue<(eventTime: Foundation.Date, event: RxSwift.Event<A.RxSwift.ObserverType.Element>)>
+```
+
+## 兼容性
+
+| 项目 | 当前状态 |
+| --- | --- |
+| Swift metadata | Swift 5、Swift 6；以 Swift 6.3.3 ABI 定义为当前适配基线 |
+| CPU 架构 | arm64、x86_64、Universal Mach-O |
+| 构建环境 | 已验证 Xcode 26.0.1 / Apple Swift 6.2 / Swift 6 language mode |
+| macOS 部署目标 | macOS 10.13+ |
+| chained fixups | 常见 userland pointer formats；不包含 kernel/shared-cache formats 或 PAC 验签 |
+| 发布签名 | linker ad hoc signature，尚未 Apple notarization |
+
+## 使用方法
+
+```text
 USAGE: SwiftDump [--debug] [--arch <arch>] <file> [--version]
 
 ARGUMENTS:
-  <file>                  MachO File
+  <file>                  Mach-O File
 
 OPTIONS:
   -d, --debug             Show debug log.
@@ -29,60 +82,112 @@ OPTIONS:
   -h, --help              Show help information.
 ```
 
-* SwiftDump ./TestMachO > result.txt
-* SwiftDump -a x86_64 ./TestMachO > result.txt
-
-#### Features
-
-* Written entirely in swift, the project is tiny
-* Dump Swift 5/6 struct, class, actor, enum, and protocol declarations
-* Parse payload and payloadless enum cases plus field mutability/indirect-case flags
-* Support class inheritance, protocol inheritance, and conformances
-* Safely read signed relative pointers and modern `LC_DYLD_CHAINED_FIXUPS` imports
-* Decode symbolic mangled-name references without instantiating target types through a private Swift runtime entry point
-
-Thanks to the runtime function, SwiftDump can demangle complex type, such as RxSwift variable. For example, 
-`RxSwift.Queue<(eventTime: Foundation.Date, event: RxSwift.Event<A.RxSwift.ObserverType.Element>)>`
-
-#### TODO
-
-* Parse swift function address
-* More
-
-#### Compile
-
-1. Clone the repo
-2. Open SwiftDump.xcodeproj with Xcode
-3. Modify 'Signing & Capabilities' to use your own id
-4. Build & Run
-
-The default Mach-O file path is `Demo/test`, you can change it in `Xcode - Product - Scheme - Edit Scheme - Arguments`
-
-The project builds in Swift 6 language mode and tracks the Swift 6.3.3 metadata ABI. Run the regression suite with:
+示例：
 
 ```sh
-SWIFTDUMP_BIN=/path/to/SwiftDump ./scripts/run_regression.sh
+SwiftDump ./TestMachO > result.txt
+SwiftDump -a x86_64 ./TestMachO > result.txt
+SwiftDump --debug -a arm64 ./TestMachO
 ```
 
-The suite covers the legacy demo plus Swift 6 actors, generics, protocol inheritance, existentials, async `@Sendable` function types, and modern chained fixups.
+示例输出：
 
-Note: marker protocols can be erased from field reflection metadata. For example, `Sendable.Type` may be emitted as `Any.Type`; SwiftDump reports the recoverable ABI representation rather than guessing source syntax.
+```swift
+protocol ChildProtocol : RootProtocol {
+}
 
-#### Credit
+enum PayloadMessage {
+    case text(String)
+    case count(Int)
+}
 
-* [Machismo](https://github.com/g-Off/Machismo) : Parsing of Mach-O binaries using swift.
-* [swift-argument-parser](https://github.com/apple/swift-argument-parser) : Straightforward, type-safe argument parsing for Swift.
-* [Swift metadata](https://knight.sc/reverse%20engineering/2019/07/17/swift-metadata.html) : High level description of all the Swift 5 sections that can show up in a Swift binary.
+actor StatusActor {
+    let counter: Int
+}
+```
 
+## 从源码构建
 
-#### License
+工程使用 Swift 6 language mode，依赖通过 Swift Package Manager 管理。
 
-MIT
+1. 克隆仓库。
+2. 使用 Xcode 打开 `SwiftDump/SwiftDump.xcodeproj`。
+3. 选择 `SwiftDump` scheme 和 `My Mac`。
+4. Build 或 Run。
 
+也可以通过命令行构建无需签名的 Release：
 
-#### Mach-O File Format
+```sh
+xcodebuild \
+  -project SwiftDump/SwiftDump.xcodeproj \
+  -scheme SwiftDump \
+  -configuration Release \
+  -destination 'generic/platform=macOS' \
+  -derivedDataPath /tmp/SwiftDumpDerivedData \
+  CODE_SIGNING_ALLOWED=NO \
+  build
+```
 
-The following image shows how SwiftDump parse swift types from file `Demo/test`. You can open this file with [MachOView](https://github.com/gdbinit/MachOView).
+构建产物位于：
 
-![demo](./Doc/macho.jpg)
+```text
+/tmp/SwiftDumpDerivedData/Build/Products/Release/SwiftDump
+```
 
+项目已在 Xcode 26.0.1 / Apple Swift 6.2 下通过构建，并以 Swift 6.3.3 官方 ABI 定义作为解析适配基线。使用更新的 Swift 6.3.3 工具链时，也应重新执行下方回归。
+
+## 回归测试
+
+测试脚本强制使用调用者指定的新构建产物，不会回退到仓库中的旧 Demo 二进制：
+
+```sh
+SWIFTDUMP_BIN=/tmp/SwiftDumpDerivedData/Build/Products/Release/SwiftDump \
+  ./scripts/run_regression.sh
+```
+
+回归范围包括：
+
+- 旧版 `Demo/test`。
+- Swift 6 actor、泛型与协议继承。
+- payload / payloadless enum。
+- existential 与 `Error`。
+- async `@Sendable` 函数类型。
+- 现代 chained fixups 与损坏输入安全性。
+
+## ABI 边界
+
+- SwiftDump 输出 metadata 中能够恢复的信息，不猜测已经被编译器擦除的源码语法。例如 marker protocol 可能在 field reflection metadata 中被擦除，`Sendable.Type` 可能只能恢复为 `Any.Type`。
+- chained fixups 当前聚焦常见 userland pointer formats，不实现 kernel/shared-cache formats 或 PAC 验签。
+- 不通过保留的私有 Swift 类型实例化入口加载目标类型，避免离线 dump 触发目标程序运行时行为。
+
+## 项目结构
+
+```text
+SwiftDump/                  Xcode 工程与 Swift 源码
+Tests/Fixtures/            Swift 6 回归输入
+scripts/run_regression.sh  回归入口
+Demo/                      旧版示例 Mach-O 与输出
+Doc/                       示例图片
+```
+
+## TODO
+
+- 导出 Swift 函数地址。
+- 扩展更多 chained pointer formats 与 metadata trailing objects。
+
+## 参考与致谢
+
+- [Machismo](https://github.com/g-Off/Machismo)：使用 Swift 读取 Mach-O。
+- [swift-argument-parser](https://github.com/apple/swift-argument-parser)：类型安全的命令行参数解析。
+- [Swift metadata](https://knight.sc/reverse%20engineering/2019/07/17/swift-metadata.html)：Swift metadata 高层介绍。
+- [Swift ABI 源码](https://github.com/swiftlang/swift/tree/swift-6.3.3-RELEASE/include/swift/ABI)：本项目当前 ABI 适配依据。
+
+## Mach-O 文件格式
+
+下图展示 SwiftDump 如何从 `Demo/test` 恢复 Swift 类型。可以使用 [MachOView](https://github.com/gdbinit/MachOView) 打开示例文件并对照查看。
+
+![Mach-O 文件结构](./Doc/macho.jpg)
+
+## License
+
+[MIT](./LICENSE)
