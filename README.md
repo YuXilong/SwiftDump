@@ -3,7 +3,7 @@
 
 ##### [中文文档](./README_zh.md)
 
-SwiftDump is a command-line tool for retriving the Swift Object info from Mach-O file. Similar to [class-dump](https://github.com/nygard/class-dump/), but the difference is that SwiftDump focus on swift 5 objects. For Mach-O files mixed with Objective-C and swift, you can combine class-dump with SwiftDump.
+SwiftDump is a command-line tool for retrieving Swift object information from Mach-O files. Similar to [class-dump](https://github.com/nygard/class-dump/), SwiftDump focuses on Swift 5 and Swift 6 metadata. For Mach-O files mixed with Objective-C and Swift, you can combine class-dump with SwiftDump.
 
 There is alos a [Frida](https://www.frida.re/) version named [FridaSwiftDump](https://github.com/neil-wu/FridaSwiftDump/).
 
@@ -35,10 +35,11 @@ OPTIONS:
 #### Features
 
 * Written entirely in swift, the project is tiny
-* Dump swift 5 struct/class/enum/protocol
-* Parse enum with payload case
-* Support inheritance and protocol
-* Since it is written in swift, the mangled names are demangled by swift's runtime function, such as `swift_getTypeByMangledNameInContext` and `swift_demangle_getDemangledName`. 
+* Dump Swift 5/6 struct, class, actor, enum, and protocol declarations
+* Parse payload and payloadless enum cases plus field mutability/indirect-case flags
+* Support class inheritance, protocol inheritance, and conformances
+* Safely read signed relative pointers and modern `LC_DYLD_CHAINED_FIXUPS` imports
+* Decode symbolic mangled-name references without instantiating target types through a private Swift runtime entry point
 
 Thanks to the runtime function, SwiftDump can demangle complex type, such as RxSwift variable. For example, 
 `RxSwift.Queue<(eventTime: Foundation.Date, event: RxSwift.Event<A.RxSwift.ObserverType.Element>)>`
@@ -57,7 +58,15 @@ Thanks to the runtime function, SwiftDump can demangle complex type, such as RxS
 
 The default Mach-O file path is `Demo/test`, you can change it in `Xcode - Product - Scheme - Edit Scheme - Arguments`
 
-(Tested on Xcode Version 11.5 (11E608c), MacOS 10.15.5)
+The project builds in Swift 6 language mode and tracks the Swift 6.3.3 metadata ABI. Run the regression suite with:
+
+```sh
+SWIFTDUMP_BIN=/path/to/SwiftDump ./scripts/run_regression.sh
+```
+
+The suite covers the legacy demo plus Swift 6 actors, generics, protocol inheritance, existentials, async `@Sendable` function types, and modern chained fixups.
+
+Note: marker protocols can be erased from field reflection metadata. For example, `Sendable.Type` may be emitted as `Any.Type`; SwiftDump reports the recoverable ABI representation rather than guessing source syntax.
 
 #### Credit
 
@@ -76,5 +85,4 @@ MIT
 The following image shows how SwiftDump parse swift types from file `Demo/test`. You can open this file with [MachOView](https://github.com/gdbinit/MachOView).
 
 ![demo](./Doc/macho.jpg)
-
 
