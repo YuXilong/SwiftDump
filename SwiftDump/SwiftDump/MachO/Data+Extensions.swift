@@ -27,14 +27,34 @@ import Foundation
 
 extension Data {
 	subscript(_ arch: MachOFatArch) -> Data {
-		return Data(self[arch.offset..<(arch.offset + arch.size)])
+        guard
+            let start = Int(exactly: arch.offset),
+            let size = Int(exactly: arch.size),
+            hasReadableRange(offset: start, length: size)
+        else {
+            return Data()
+        }
+		return Data(self[start..<(start + size)])
 	}
+
+    private func zeroValue<T>(_ type: T.Type) -> T {
+        let zeroed = Data(count: MemoryLayout<T>.size)
+        return zeroed.withUnsafeBytes { ptr in
+            ptr.loadUnaligned(as: T.self)
+        }
+    }
 	
-	func extract<T>(_ type: T.Type, offset: Int = 0) -> T {
-        let data = self[offset..<offset + MemoryLayout<T>.size];
-        let ret = data.withUnsafeBytes { (ptr:UnsafeRawBufferPointer) -> T in
+	func extractOptional<T>(_ type: T.Type, offset: Int = 0) -> T? {
+        guard let range = readableRange(offset: offset, length: MemoryLayout<T>.size) else {
+            return nil
+        }
+        let ret = self[range].withUnsafeBytes { (ptr:UnsafeRawBufferPointer) -> T in
             return ptr.loadUnaligned(as: T.self)
         }
         return ret;
 	}
+
+    func extract<T>(_ type: T.Type, offset: Int = 0) -> T {
+        return extractOptional(type, offset: offset) ?? zeroValue(type)
+    }
 }

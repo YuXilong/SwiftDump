@@ -16,15 +16,20 @@ public struct Section64 {
     private(set) var info:section_64
     
     var align: UInt32 {
-        return UInt32(pow(Double(2), Double(info.align)))
+        guard info.align < UInt32.bitWidth else {
+            return 0
+        }
+        return UInt32(1) << info.align
     }
     var fileOffset: UInt32 {
         return info.offset;
     }
     
     var num:Int {
-        let num: Int = Int(info.size) / Int(align);
-        return num;
+        guard align > 0, let size = Int(exactly: info.size) else {
+            return 0
+        }
+        return size / Int(align)
     }
     
     
@@ -42,4 +47,3 @@ public struct Section64 {
     
     
 }
-

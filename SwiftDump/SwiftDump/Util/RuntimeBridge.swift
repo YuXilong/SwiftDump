@@ -8,12 +8,6 @@
 
 import Foundation
 
-@_silgen_name("swift_getTypeByMangledNameInContext")
-public func _getTypeByMangledNameInContext(_ name: UnsafePointer<UInt8>,
-                                           _ nameLength: Int,
-                                           genericContext: UnsafeRawPointer?,
-                                           genericArguments: UnsafeRawPointer?) -> Any.Type?
-
 
 // size_t swift_demangle_getDemangledName(const char *MangledName, char *OutputBuffer,size_t Length)
 @_silgen_name("swift_demangle_getDemangledName")
@@ -25,71 +19,113 @@ public func _getDemangledName(_ name:UnsafePointer<Int8>?, output:UnsafeMutableP
 // if demangle fail, will return the origin string
 // Only demangle str start with So/$So/_$so/_T
 func canDemangleFromRuntime(_ instr: String) -> Bool {
-    return instr.hasPrefix("So") || instr.hasPrefix("$So") || instr.hasPrefix("_$So") || instr.hasPrefix("_T")
-}
-func runtimeGetDemangledName(_ instr: String) -> String {
-    var str: String = instr;
-    if (instr.hasPrefix("$s")) {
-        str = instr;
-    } else if (instr.hasPrefix("So")) {
-        str = "$s" + instr;
-    } else if (instr.hasPrefix("_T")) {
-        //
-    } else {
-        return instr;
-    }
-    
-    let strPtr:UnsafePointer<Int8> = str.withCString { (ptr:UnsafePointer<Int8>) -> UnsafePointer<Int8> in
-        return ptr;
-    }
-    
-    let bufLen: Int = 128; // may be 128 is big enough
-    var buf:[Int8] = Array(repeating: 0, count: bufLen);
-    let retLen = _getDemangledName(strPtr, output: &buf, len: bufLen)
-    
-    if retLen > 0 && retLen < bufLen {
-        let resultBuf:[UInt8] = buf[0..<retLen].map{ UInt8($0) }
-        let retStr = String(bytes:  resultBuf, encoding: .utf8)
-        
-        return retStr?.replacingOccurrences(of: "__C.", with: "") ?? instr;
-    }
-    return instr; // return the original string
-    
+    return instr.hasPrefix("So")
+        || instr.hasPrefix("$So")
+        || instr.hasPrefix("_$So")
+        || instr.hasPrefix("_T")
+        || instr.hasPrefix("$s")
+        || instr.hasPrefix("$S")
+        || instr.hasPrefix("$e")
 }
 
+private func standardSwiftTypeAlias(_ typeName: String) -> String {
+    switch typeName {
+    case "Swift.Bool": return "Bool"
+    case "Swift.Double": return "Double"
+    case "Swift.Float": return "Float"
+    case "Swift.Int": return "Int"
+    case "Swift.Int8": return "Int8"
+    case "Swift.Int16": return "Int16"
+    case "Swift.Int32": return "Int32"
+    case "Swift.Int64": return "Int64"
+    case "Swift.String": return "String"
+    case "Swift.UInt": return "UInt"
+    case "Swift.UInt8": return "UInt8"
+    case "Swift.UInt16": return "UInt16"
+    case "Swift.UInt32": return "UInt32"
+    case "Swift.UInt64": return "UInt64"
+    case "Swift.Any": return "Any"
+    default: return typeName
+    }
+}
+
+private func normalizeDemangledTypeName(_ typeName: String) -> String {
+    let cleaned = typeName
+        .replacingOccurrences(of: "__C.", with: "")
+        .replacingOccurrences(of: #"(?<![A-Za-z0-9_])Swift\."#,
+                              with: "",
+                              options: .regularExpression)
+    return standardSwiftTypeAlias(fixOptionalTypeName(cleaned))
+}
+
+private func runtimeCopyDemangledName(_ mangledName: String) -> String? {
+    let initialCapacity = max(256, mangledName.utf8.count * 4)
+    return mangledName.withCString { ptr in
+        var capacity = initialCapacity
+        while capacity <= (1 << 20) {
+            var buffer = [Int8](repeating: 0, count: capacity)
+            let retLen = _getDemangledName(ptr, output: &buffer, len: capacity)
+            if retLen > 0 && retLen < capacity {
+                let bytes = buffer[0..<retLen].map { UInt8(bitPattern: $0) }
+                return String(bytes: bytes, encoding: .utf8)
+            }
+            capacity *= 2
+        }
+        return nil
+    }
+}
+
+func runtimeGetDemangledName(_ instr: String) -> String {
+    var mangledName = instr
+    if instr.hasPrefix("So") {
+        mangledName = "$s" + instr
+    } else if !(instr.hasPrefix("$s") || instr.hasPrefix("$S") || instr.hasPrefix("$e") || instr.hasPrefix("_T")) {
+        return instr
+    }
+    
+    guard let demangled = runtimeCopyDemangledName(mangledName) else {
+        return instr
+    }
+    return normalizeDemangledTypeName(demangled)
+}
 
 func getTypeFromMangledName(_ str: String) -> String {
-    if (canDemangleFromRuntime(str)) {
-        return runtimeGetDemangledName(str);
+    if str.isEmpty || str.hasPrefix("0x") {
+        return str
     }
-    //check is ascii string
-    if (!str.isAsciiStr()) {
-        return str;
+    if canDemangleFromRuntime(str) {
+        let demangled = runtimeGetDemangledName(str)
+        if demangled != str {
+            return demangled
+        }
     }
-    guard let ptr = str.toPointer() else {
-        return str;
-    }
-    
-    var useCnt:Int = str.count
-    if (str.hasSuffix("_pG")) {
-        useCnt = useCnt - 3
+    if !str.isAsciiStr() {
+        return str
     }
     
-    guard let typeRet: Any.Type = _getTypeByMangledNameInContext(ptr, useCnt, genericContext: nil, genericArguments: nil) else {
-        return str;
+    let candidateNames: [String]
+    if str.hasPrefix("$s") || str.hasPrefix("$S") || str.hasPrefix("$e") || str.hasPrefix("_T") {
+        candidateNames = [str]
+    } else {
+        candidateNames = ["$s" + str]
     }
     
-    let tstr: String = String(describing: typeRet)
-    //print("\(str) -> \(tstr)")
-    return fixOptionalTypeName(tstr);
+    for candidate in candidateNames {
+        let demangled = runtimeGetDemangledName(candidate)
+        if demangled != candidate {
+            return demangled
+        }
+    }
+    return str
 }
 
 // Optional<Any.Type>  => Any.Type?
 // Optional<Int>  => Int?
 func fixOptionalTypeName(_ typeName: String) -> String {
-    let prefix: String = "Optional";
-    if (!typeName.hasPrefix(prefix)) {
-        return typeName;
+    let prefixes = ["Optional", "Swift.Optional"]
+    guard let prefix = prefixes.first(where: { typeName.hasPrefix($0 + "<") }),
+          typeName.hasSuffix(">") else {
+        return typeName
     }
     var name: String = typeName.removingPrefix(prefix);
     name = name.removingPrefix("<")
@@ -108,6 +144,3 @@ func removeSwiftModulePrefix(_ typeName: String) -> String {
     
     return typeName;
 }
-
-
-

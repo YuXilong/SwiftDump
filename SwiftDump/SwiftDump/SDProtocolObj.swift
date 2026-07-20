@@ -14,6 +14,7 @@ final class SDProtocolObj {
     var numRequirementsInSignature: UInt32 = 0;
     var numRequirements: UInt32 = 0;
     var associatedTypeNames: String = ""; // joined by " "
+    var descriptorOffset: UInt64 = 0
     
     var superProtocols:[String] = [];
     

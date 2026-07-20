@@ -16,21 +16,15 @@ struct SDPointer {
     }
     
     func add(_ offset: Int64) -> SDPointer {
-        var address: UInt64 = 0
-        if (offset < 0) {
-            address = self.address - UInt64(abs(offset) );
-        } else {
-            address = self.address + UInt64(offset);
-        }
-        return SDPointer(addr: address);
+        let delta = UInt64(bitPattern: offset)
+        return SDPointer(addr: self.address &+ delta);
     }
-    
-    func fix() -> SDPointer {
-        return SDPointer(addr: self.address & 0xFFFFFFFF);
+
+    func applying(relativeOffset: Int32) -> SDPointer {
+        return add(Int64(relativeOffset));
     }
     
     var desc: String {
         return self.address.hex;
     }
 }
-
