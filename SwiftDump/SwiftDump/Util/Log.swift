@@ -15,23 +15,41 @@ enum LogLevel: Int {
     case error = 4
 }
 
-fileprivate var loglevel: LogLevel = .warn;
+private final class LogConfiguration: @unchecked Sendable {
+    private let lock = NSLock()
+    private var level: LogLevel = .warn
 
-func enableDebugLog() {
-    loglevel = .debug;
+    func enableDebug() {
+        lock.lock()
+        level = .debug
+        lock.unlock()
+    }
+
+    func shouldLog(_ level: LogLevel) -> Bool {
+        lock.lock()
+        let currentLevel = self.level
+        lock.unlock()
+        return level.rawValue >= currentLevel.rawValue
+    }
 }
 
-func Log(_ msg: String, level:LogLevel = .debug, file: String = #file, method: String = #function, line: Int = #line) {
-    
-    if (level.rawValue < loglevel.rawValue ) {
-        return;
+fileprivate let logConfiguration = LogConfiguration()
+
+func enableDebugLog() {
+    logConfiguration.enableDebug()
+}
+
+func Log(_ msg: String, level: LogLevel = .debug, file: String = #file, method: String = #function, line: Int = #line) {
+
+    if (!logConfiguration.shouldLog(level)) {
+        return
     }
-    
+
     var filename = file.components(separatedBy: "/").last ?? "unknowfile"
     filename = filename.components(separatedBy: ".").first ?? filename
-    let methodPrefix: String = method.components(separatedBy: "(").first ?? method;
-    
-    let str: String = "[\(filename) \(methodPrefix)] \(msg)";
+    let methodPrefix: String = method.components(separatedBy: "(").first ?? method
+
+    let str: String = "[\(filename) \(methodPrefix)] \(msg)"
     print(str)
 }
 
@@ -44,4 +62,3 @@ func LogWarn(_ msg: String, file: String = #file, method: String = #function, li
     let prefix: String = "[warn]"
     Log(prefix + msg, level: .warn, file: file, method: method, line: line)
 }
-

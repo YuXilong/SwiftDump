@@ -36,11 +36,16 @@ struct MachOLoadCommand {
 	let offset: Int
 	let byteSwapped: Bool
 	
-	init(data: Data, offset: Int, byteSwapped: Bool) {
-		var loadCommand = data.extract(load_command.self, offset: offset)
+	init?(data: Data, offset: Int, byteSwapped: Bool) {
+        guard var loadCommand = data.extractOptional(load_command.self, offset: offset) else {
+            return nil
+        }
 		if byteSwapped {
 			swap_load_command(&loadCommand, byteSwappedOrder)
 		}
+        guard loadCommand.cmdsize >= MemoryLayout<load_command>.size else {
+            return nil
+        }
 		self.command = loadCommand.cmd
 		self.size = Int(loadCommand.cmdsize)
 		self.data = data

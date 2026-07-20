@@ -60,25 +60,53 @@ final class SDFileLoader {
     }
     
     func readU32(_ archPtr: SDPointer) -> UInt32 {
-        return self.machoFile?.dataSlice.readU32(offset: Int(archPtr.address)) ?? 0;
+        return self.machoFile?.readValue(at: archPtr) ?? 0;
     }
     
     func readU64(_ archPtr: SDPointer) -> UInt64 {
-        return self.machoFile?.dataSlice.readU64(offset: Int(archPtr.address)) ?? 0;
+        return self.machoFile?.readValue(at: archPtr) ?? 0;
     }
     
     func readS32(_ archPtr: SDPointer) -> Int32 {
-        return self.machoFile?.dataSlice.readS32(offset: Int(archPtr.address)) ?? 0;
+        return self.machoFile?.readValue(at: archPtr) ?? 0;
     }
     
-    func readMove(_ ptr: SDPointer) -> SDPointer {
-        let val = readU32(ptr);
-        return ptr.add(Int64(val));
+    func resolveRelativePointer(_ ptr: SDPointer, clearingLowBits lowBitCount: Int = 0) -> SDPointer? {
+        guard lowBitCount >= 0, lowBitCount < 31 else {
+            return nil
+        }
+        let rawOffset = readS32(ptr)
+        if rawOffset == 0 {
+            return nil
+        }
+        let mask = Int32(bitPattern: ~((UInt32(1) << UInt32(lowBitCount)) - 1))
+        return ptr.applying(relativeOffset: rawOffset & mask)
+    }
+
+    func resolveRelativeIndirectablePointer(_ ptr: SDPointer) -> SDPointer? {
+        let rawOffset = readS32(ptr)
+        guard rawOffset != 0 else {
+            return nil
+        }
+        guard let relativeTarget = resolveRelativePointer(ptr, clearingLowBits: 1) else {
+            return nil
+        }
+        if (rawOffset & 1) == 0 {
+            return relativeTarget
+        }
+        return machoFile?.resolveStoredPointer(at: relativeTarget)
+    }
+
+    func resolveStoredPointer(at ptr: SDPointer) -> SDPointer? {
+        return machoFile?.resolveStoredPointer(at: ptr)
+    }
+
+    func importedSymbol(at ptr: SDPointer) -> String? {
+        return machoFile?.importedSymbol(at: ptr)
     }
     
     func readStr(_ ptr: SDPointer) -> String? {
-        return self.machoFile?.dataSlice.readCString(from: Int(ptr.address))
+        return self.machoFile?.readCString(at: ptr)
     }
     
 }
-

@@ -12,6 +12,8 @@ import Foundation
 final class SDNominalObjField {
     var name: String = "";
     var type: String = "";
+    var isVar: Bool = false
+    var isIndirectCase: Bool = false
     
     var namePtr: SDPointer = SDPointer(addr: 0)
     var typePtr: SDPointer = SDPointer(addr: 0)
@@ -34,13 +36,16 @@ final class SDNominalObj {
         let intent: String = "    ";
         var str: String = "";
         let kind = contextDescriptorFlag.kind;
-        str += "\(kind) " + typeName;
+        let declarationKind = kind == .Class && contextDescriptorFlag.typeFlags.classIsActor
+            ? "actor"
+            : kind.description
+        str += "\(declarationKind) " + typeName;
         if (!superClassName.isEmpty) {
             str += " : " + superClassName;
         }
         if (protocols.count > 0) {
             let superStr: String = protocols.joined(separator: ",")
-            let tmp: String = superClassName.isEmpty ? " : " : "";
+            let tmp: String = superClassName.isEmpty ? " : " : ",";
             str += tmp + superStr;
         }
         str += " {\n";
@@ -53,15 +58,17 @@ final class SDNominalObj {
         for field in fields {
             var fs: String = intent;
             if kind == .Enum {
+                let casePrefix = field.isIndirectCase ? "indirect case " : "case "
                 if (field.type.isEmpty) {
-                    fs += "case \(field.name)\n"; // without payload
+                    fs += "\(casePrefix)\(field.name)\n"; // without payload
                 } else {
                     let tmp = field.type.hasPrefix("(") ? field.type : "(" + field.type + ")";
-                    fs += "case \(field.name)\(tmp)\n"; // enum with payload
+                    fs += "\(casePrefix)\(field.name)\(tmp)\n"; // enum with payload
                 }
                 
             } else {
-                fs += "let \(field.name): \(field.type);\n";
+                let modifier = field.isVar ? "var" : "let"
+                fs += "\(modifier) \(field.name): \(field.type);\n";
             }
             str += fs;
         }
@@ -72,5 +79,3 @@ final class SDNominalObj {
     }
     
 }
-
-

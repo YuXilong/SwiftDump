@@ -1,12 +1,12 @@
 /*
  Copyright Geoffrey Foster
- 
+
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
  You may obtain a copy of the License at
- 
+
  http://www.apache.org/licenses/LICENSE-2.0
- 
+
  Unless required by applicable law or agreed to in writing, software
  distributed under the License is distributed on an "AS IS" BASIS,
  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -28,7 +28,7 @@ import MachO
 
 extension MachOLoadCommand {
 	public struct Segment: MachOLoadCommandType {
-		
+
 		//	public var cmd: UInt32 /* for 64-bit architectures */ /* LC_SEGMENT_64 */
 		//	public var cmdsize: UInt32 /* includes sizeof section_64 structs */
 		//	public var segname: (Int8, Int8, Int8, Int8, Int8, Int8, Int8, Int8, Int8, Int8, Int8, Int8, Int8, Int8, Int8, Int8) /* segment name */
@@ -40,56 +40,93 @@ extension MachOLoadCommand {
 		//	public var initprot: vm_prot_t /* initial VM protection */
 		//	public var nsects: UInt32 /* number of sections in segment */
 		//	public var flags: UInt32 /* flags */
-		
+
 		public let name: String
-        
+
         private(set) var command64: segment_command_64? = nil; // neilwu added
         private(set) var command: segment_command? = nil; //
-        
+
         private(set) var sections:[Section64] = []
-        
+
+        var vmaddr: UInt64 {
+            return command64?.vmaddr ?? UInt64(command?.vmaddr ?? 0)
+        }
+
+        var vmsize: UInt64 {
+            return command64?.vmsize ?? UInt64(command?.vmsize ?? 0)
+        }
+
+        var fileoff: UInt64 {
+            return command64?.fileoff ?? UInt64(command?.fileoff ?? 0)
+        }
+
+        var filesize: UInt64 {
+            return command64?.filesize ?? UInt64(command?.filesize ?? 0)
+        }
+
 		init(command: segment_command_64) {
 			self.name = String(command.segname)
             self.command64 = command
 		}
-		
+
 		init(command: segment_command) {
 			self.name = String(command.segname)
             self.command = command;
 		}
-		
-		init(loadCommand: MachOLoadCommand) {
+
+		init?(loadCommand: MachOLoadCommand) {
 			if loadCommand.command == LC_SEGMENT_64 {
-                var segmentCommand64:segment_command_64 = loadCommand.data.extract(segment_command_64.self, offset: loadCommand.offset)
+                guard var segmentCommand64:segment_command_64 = loadCommand.data.extractOptional(segment_command_64.self, offset: loadCommand.offset) else {
+                    return nil
+                }
 				if loadCommand.byteSwapped {
 					swap_segment_command_64(&segmentCommand64, byteSwappedOrder)
 				}
 				self.init(command: segmentCommand64)
-                
+
                 if (segmentCommand64.nsects <= 0) {
                     return;
                 }
                 let sectionOffset = loadCommand.offset + 0x48; // 0x48=sizeof(segment_command_64)
-                
+                let sectionSize = MemoryLayout<section_64>.size
+                let sectionsByteCount = Int(segmentCommand64.nsects) * sectionSize
+                guard loadCommand.data.hasReadableRange(offset: sectionOffset, length: sectionsByteCount) else {
+                    self.sections = []
+                    return
+                }
+
                 for i in 0..<segmentCommand64.nsects {
-                    let offset = sectionOffset + 0x50 * Int(i);
+                    let offset = sectionOffset + sectionSize * Int(i);
                     //print("\(self.name) \(i)", offset.hex )
-                    let section:section_64 = loadCommand.data.extract(section_64.self, offset: offset)
+                    guard let section:section_64 = loadCommand.data.extractOptional(section_64.self, offset: offset) else {
+                        break
+                    }
                     let sec = Section64(section: section);
                     self.sections.append(sec);
                 }
 			} else {
-				var segmentCommand = loadCommand.data.extract(segment_command.self, offset: loadCommand.offset)
+				guard var segmentCommand = loadCommand.data.extractOptional(segment_command.self, offset: loadCommand.offset) else {
+                    return nil
+                }
 				if loadCommand.byteSwapped {
 					swap_segment_command(&segmentCommand, byteSwappedOrder)
 				}
 				self.init(command: segmentCommand)
-                
+
                 //TODO: parse sections
 			}
 		}
-        
-        
-        
+
+        func fileOffset(forVMAddress address: UInt64) -> UInt64? {
+            guard address >= vmaddr else {
+                return nil
+            }
+            let delta = address - vmaddr
+            guard delta < filesize else {
+                return nil
+            }
+            return fileoff + delta
+        }
+
 	}
 }

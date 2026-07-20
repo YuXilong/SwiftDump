@@ -53,10 +53,14 @@ public struct MachOFatHeader {
     public let architectures: [MachOFatArch];
     
 	init?(data: Data) {
-		let magic = data.extract(UInt32.self)
+		guard let magic = data.extractOptional(UInt32.self) else {
+            return nil
+        }
 		guard [FAT_MAGIC, FAT_MAGIC_64, FAT_CIGAM, FAT_CIGAM_64].contains(magic) else { return nil }
 		
-		var header = data.extract(fat_header.self)
+		guard var header = data.extractOptional(fat_header.self) else {
+            return nil
+        }
 		let is64Bit = [FAT_MAGIC_64, FAT_CIGAM_64].contains(magic)
 		let byteSwapped = [FAT_CIGAM, FAT_CIGAM_64].contains(magic)
 		if [FAT_CIGAM, FAT_CIGAM_64].contains(magic) {
@@ -66,7 +70,9 @@ public struct MachOFatHeader {
 		var architectures: [MachOFatArch] = []
 		if is64Bit {
 			for _ in 0..<header.nfat_arch {
-				var fatArch = data.extract(fat_arch_64.self, offset: offset)
+                guard var fatArch = data.extractOptional(fat_arch_64.self, offset: offset) else {
+                    return nil
+                }
 				offset += MemoryLayout.size(ofValue: fatArch)
 				if byteSwapped {
 					swap_fat_arch_64(&fatArch, 1, byteSwappedOrder)
@@ -75,7 +81,9 @@ public struct MachOFatHeader {
 			}
 		} else {
 			for _ in 0..<header.nfat_arch {
-				var fatArch = data.extract(fat_arch.self, offset: offset)
+                guard var fatArch = data.extractOptional(fat_arch.self, offset: offset) else {
+                    return nil
+                }
 				offset += MemoryLayout.size(ofValue: fatArch)
 				if byteSwapped {
 					swap_fat_arch(&fatArch, 1, byteSwappedOrder)
