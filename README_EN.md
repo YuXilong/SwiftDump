@@ -18,16 +18,16 @@ SwiftDump is a command-line tool that recovers Swift type declarations from Mach
 
 ## Download
 
-Download the latest build from [GitHub Releases](https://github.com/YuXilong/SwiftDump/releases). The current stable release is [SwiftDump v1.1.0](https://github.com/YuXilong/SwiftDump/releases/tag/v1.1.0).
+Download the latest build from [GitHub Releases](https://github.com/YuXilong/SwiftDump/releases). The current stable release is [SwiftDump v1.2.0](https://github.com/YuXilong/SwiftDump/releases/tag/v1.2.0).
 
 The release provides an arm64/x86_64 Universal CLI, documentation, license, build information, complete build and regression logs, and SHA-256 checksums.
 
 ```sh
-curl -LO https://github.com/YuXilong/SwiftDump/releases/download/v1.1.0/SwiftDump-v1.1.0-macos-universal.zip
-curl -LO https://github.com/YuXilong/SwiftDump/releases/download/v1.1.0/SHA256SUMS
-shasum -a 256 SwiftDump-v1.1.0-macos-universal.zip
-unzip SwiftDump-v1.1.0-macos-universal.zip
-cd SwiftDump-v1.1.0-macos-universal
+curl -LO https://github.com/YuXilong/SwiftDump/releases/download/v1.2.0/SwiftDump-v1.2.0-macos-universal.zip
+curl -LO https://github.com/YuXilong/SwiftDump/releases/download/v1.2.0/SHA256SUMS
+shasum -a 256 SwiftDump-v1.2.0-macos-universal.zip
+unzip SwiftDump-v1.2.0-macos-universal.zip
+cd SwiftDump-v1.2.0-macos-universal
 chmod +x SwiftDump
 ./SwiftDump --version
 ```
@@ -35,6 +35,21 @@ chmod +x SwiftDump
 Compare the `shasum` output with the corresponding entry in `SHA256SUMS` before running the binary.
 
 > The release binary has an ad hoc signature and is not Apple-notarized. macOS may require confirmation under System Settings → Privacy & Security when the archive carries a browser quarantine attribute.
+
+### Homebrew
+
+Install from the official project tap with one command:
+
+```sh
+brew install yuxilong/tap/swift-dump
+SwiftDump --version
+```
+
+The formula also installs a `swift-dump` command alias. Upgrade later with:
+
+```sh
+brew upgrade yuxilong/tap/swift-dump
+```
 
 ## Features
 
