@@ -2,7 +2,7 @@
 //  main.swift
 //  SwiftDump
 //
-//  Created by neilwu on 2020/6/26.
+//  Created by yuxilong on 2020/6/26.
 //  Copyright © 2020 nw. All rights reserved.
 //
 
@@ -28,8 +28,8 @@ func runMain(file: String, cpu: MachOCpuType) {
     parser.dumpAll();
 }
 
-fileprivate let SDVersion: String = "1.2.0";
-fileprivate let SDBuildTime: String = "2026-07-21";
+fileprivate let SDVersion: String = "1.2.1";
+fileprivate let SDBuildTime: String = "2026-07-22";
 
 struct SwiftDump: ParsableCommand {
     
@@ -48,7 +48,7 @@ struct SwiftDump: ParsableCommand {
     
     mutating func run() throws {
         if (version) {
-            print("SwiftDump v\(SDVersion) \(SDBuildTime). Created by neilwu.");
+            print("SwiftDump v\(SDVersion) \(SDBuildTime). Created by yuxilong.");
             if (file.isEmpty) {
                 return;
             }
