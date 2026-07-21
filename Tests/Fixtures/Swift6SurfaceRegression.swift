@@ -17,6 +17,29 @@ struct GenericBox<T> {
 typealias PairAlias = (Int, String)
 typealias AsyncSendableClosure = @Sendable () async -> String
 
+struct LicenseDevice {
+    let id: String
+    let name: String
+    let activatedAt: Date?
+
+    static let maximumActivations = 5
+    static let featureEnabled = true
+    static let timeoutSeconds = 1.5
+    nonisolated(unsafe) static var serviceName = "SwiftDump"
+
+    init(id: String, name: String, activatedAt: Date?) {
+        self.id = id
+        self.name = name
+        self.activatedAt = activatedAt
+    }
+}
+
+struct FixedLayoutRecord {
+    let count: Int64
+    let enabled: Bool
+    let code: UInt32
+}
+
 protocol RootProtocol {
     func rootRequirement(seed: Int) -> String
 }
@@ -95,6 +118,12 @@ struct FixtureMain {
         _ = ObjectiveCarrier.staticMethod(value: "factory")
         _ = carrier.genericMethod(value: "generic")
         _ = ObjectiveCarrier.classMethod(code: 9)
+        _ = LicenseDevice(id: "device-id", name: "Mac", activatedAt: nil)
+        _ = LicenseDevice.maximumActivations
+        _ = LicenseDevice.featureEnabled
+        _ = LicenseDevice.timeoutSeconds
+        _ = LicenseDevice.serviceName
+        _ = FixedLayoutRecord(count: 7, enabled: true, code: 42)
         let task = Task {
             _ = try? await carrier.instanceMethod(box: GenericBox(item: "async"), flag: true)
         }

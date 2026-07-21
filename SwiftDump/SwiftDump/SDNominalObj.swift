@@ -14,12 +14,50 @@ final class SDNominalObjField {
     var type: String = "";
     var isVar: Bool = false
     var isIndirectCase: Bool = false
+    var offset: SDFieldOffset = .unavailable
     
     var namePtr: SDPointer = SDPointer(addr: 0)
     var typePtr: SDPointer = SDPointer(addr: 0)
 }
 
-enum SDCallableKind {
+enum SDFieldOffset {
+    case known(UInt64)
+    case runtimeDependent
+    case unavailable
+
+    var dumpComment: String {
+        switch self {
+        case let .known(value): return value.hex
+        case .runtimeDependent: return "runtime-dependent"
+        case .unavailable: return "offset unavailable"
+        }
+    }
+}
+
+enum SDStaticPropertyValue {
+    case literal(String)
+    case runtimeInitialized
+    case unavailable
+}
+
+struct SDStaticPropertyObj {
+    let name: String
+    let type: String
+    let isVar: Bool
+    let value: SDStaticPropertyValue
+
+    var dumpDefine: String {
+        let modifier = isVar ? "var" : "let"
+        let declaration = "static \(modifier) \(name): \(type)"
+        switch value {
+        case let .literal(literal): return declaration + " = " + literal
+        case .runtimeInitialized: return declaration + " // initialized at runtime"
+        case .unavailable: return declaration + " // value unavailable offline"
+        }
+    }
+}
+
+enum SDCallableKind: Equatable {
     case method
     case initializer
     case deinitializer
@@ -41,6 +79,9 @@ struct SDCallableObj {
 
     var dumpDefine: String {
         let intent = "    "
+        if kind == .initializer {
+            return intent + declaration + "\n"
+        }
         return intent + "// Function at \(address.hex)\n" + intent + declaration + "\n"
     }
 }
@@ -50,11 +91,13 @@ final class SDNominalObj {
     var typeName: String = ""; // type name
     var contextDescriptorFlag: SDContextDescriptorFlags = SDContextDescriptorFlags(0); // default
     var fields: [SDNominalObjField] = [];
+    var staticProperties: [SDStaticPropertyObj] = []
     var callables: [SDCallableObj] = []
     
     var mangledTypeName: String = ""; // if someone else define this type as property, you can use this to retrive the name
     var nominalOffset: Int64 = 0; // Context Descriptor offset
     var accessorOffset: UInt64 = 0; // Access Function address
+    var fieldOffsetVectorOffset: UInt32 = 0
     
     var protocols:[String] = [];
     var superClassName: String = "";
@@ -79,7 +122,10 @@ final class SDNominalObj {
         
         str += intent + "// \(contextDescriptorFlag)\n";
         if (accessorOffset > 0) {
-            str += intent + "// Access Function at \(accessorOffset.hex) \n";
+            str += intent + "// Access Function at \(accessorOffset.hex)\n";
+        }
+        for initializer in callables where initializer.kind == .initializer {
+            str += intent + "// Init Function at \(initializer.address.hex)\n"
         }
         
         for field in fields {
@@ -95,12 +141,16 @@ final class SDNominalObj {
                 
             } else {
                 let modifier = field.isVar ? "var" : "let"
-                fs += "\(modifier) \(field.name): \(field.type);\n";
+                fs += "\(modifier) \(field.name): \(field.type) // \(field.offset.dumpComment)\n";
             }
             str += fs;
         }
 
-        if !fields.isEmpty && !callables.isEmpty {
+        for property in staticProperties {
+            str += intent + property.dumpDefine + "\n"
+        }
+
+        if (!fields.isEmpty || !staticProperties.isEmpty) && !callables.isEmpty {
             str += "\n"
         }
         for callable in callables {

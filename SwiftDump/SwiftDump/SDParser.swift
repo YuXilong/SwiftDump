@@ -9,6 +9,17 @@
 import Foundation
 
 final class SDParser {
+    private struct DemangledSymbol {
+        let symbol: MachOSymbol
+        let name: String
+    }
+
+    private struct StaticPropertyCandidate {
+        let name: String
+        let type: String
+        let storage: MachOSymbol
+    }
+
     private(set) var protocolObjs:[SDProtocolObj] = [];
     private(set) var cacheProtocolAddressMap:[UInt64: String] = [:];
 
@@ -274,6 +285,9 @@ final class SDParser {
             obj.contextDescriptorFlag = sdfObj;
             obj.nominalOffset = nominalArchOffset;
             obj.accessorOffset = accessorPtr?.address ?? 0;
+            if sdfObj.kind == .Struct {
+                obj.fieldOffsetVectorOffset = loader.readU32(nominalPtr.add(24))
+            }
             self.nominalObjs.append(obj);
 
             if (sdfObj.kind == .Class) {
@@ -445,6 +459,7 @@ final class SDParser {
         "merged ",
         "key path getter for ",
         "variable initialization expression of ",
+        "one-time initialization function for ",
         "default argument ",
     ]
 
@@ -503,7 +518,8 @@ final class SDParser {
                 return nil
             }
             let propertyType = String(signature[markerRange.upperBound...])
-            let declaration = "var \(propertyName): \(propertyType) { \(accessor.keyword) }"
+            let propertyPrefix = isStatic ? "static " : (isClass ? "class " : "")
+            let declaration = propertyPrefix + "var \(propertyName): \(propertyType) { \(accessor.keyword) }"
             return SDCallableObj(kind: accessor.kind,
                                  name: propertyName,
                                  declaration: declaration,
@@ -559,8 +575,204 @@ final class SDParser {
         callables.append(callable)
     }
 
-    private func collectCallables() {
-        guard let machoFile = loader?.machoFile, !machoFile.symbols.isEmpty else {
+    private func collectDemangledSymbols() -> [DemangledSymbol] {
+        guard let symbols = loader?.machoFile?.symbols else {
+            return []
+        }
+        return symbols.compactMap { symbol in
+            guard let name = runtimeGetDemangledSymbol(symbol.name) else {
+                return nil
+            }
+            return DemangledSymbol(symbol: symbol, name: name)
+        }
+    }
+
+    private func collectFieldOffsets(from symbols: [DemangledSymbol]) {
+        guard let machoFile = loader?.machoFile else {
+            return
+        }
+
+        for obj in nominalObjs {
+            let isRuntimeDependent = obj.contextDescriptorFlag.isGeneric
+                || obj.contextDescriptorFlag.typeFlags.metadataInitializationKind != 0
+                || (obj.contextDescriptorFlag.kind == .Class
+                    && obj.contextDescriptorFlag.typeFlags.classHasResilientSuperclass)
+            for field in obj.fields {
+                field.offset = isRuntimeDependent ? .runtimeDependent : .unavailable
+            }
+        }
+
+        let nominalNameCounts = Dictionary(grouping: nominalObjs, by: \.typeName)
+            .mapValues(\.count)
+
+        for item in symbols where item.name.hasPrefix("direct field offset for ") {
+            guard let owner = nominalObjs.first(where: {
+                $0.contextDescriptorFlag.kind == .Class
+                    && !$0.contextDescriptorFlag.typeFlags.classHasResilientSuperclass
+                    && nominalNameCounts[$0.typeName] == 1
+                    && item.name.contains(".\($0.typeName).")
+            }) else {
+                continue
+            }
+            let ownerMarker = ".\(owner.typeName)."
+            guard let ownerRange = item.name.range(of: ownerMarker),
+                  let typeRange = item.name.range(of: " : ", range: ownerRange.upperBound..<item.name.endIndex) else {
+                continue
+            }
+            let fieldName = String(item.name[ownerRange.upperBound..<typeRange.lowerBound])
+            guard let field = owner.fields.first(where: { $0.name == fieldName }),
+                  let offset: UInt64 = machoFile.readValue(at: SDPointer(addr: item.symbol.value)),
+                  offset > 0 else {
+                continue
+            }
+            field.offset = .known(offset)
+        }
+
+        for obj in nominalObjs where obj.contextDescriptorFlag.kind == .Struct
+            && !obj.contextDescriptorFlag.isGeneric
+            && obj.contextDescriptorFlag.typeFlags.metadataInitializationKind == 0
+            && obj.fieldOffsetVectorOffset != 0
+            && nominalNameCounts[obj.typeName] == 1 {
+            guard let metadata = symbols.first(where: {
+                $0.symbol.isDefinedInSection
+                    && $0.name.hasPrefix("type metadata for ")
+                    && $0.name.hasSuffix(".\(obj.typeName)")
+            })?.symbol else {
+                continue
+            }
+            let vectorByteOffset = UInt64(obj.fieldOffsetVectorOffset) * UInt64(MemoryLayout<UInt64>.size)
+            guard metadata.value <= UInt64.max - vectorByteOffset else {
+                continue
+            }
+            let vectorAddress = metadata.value + vectorByteOffset
+            for (index, field) in obj.fields.enumerated() {
+                let entryByteOffset = UInt64(index) * UInt64(MemoryLayout<UInt32>.size)
+                guard vectorAddress <= UInt64.max - entryByteOffset,
+                      let offset: UInt32 = machoFile.readValue(
+                        at: SDPointer(addr: vectorAddress + entryByteOffset)
+                      ) else {
+                    break
+                }
+                field.offset = .known(UInt64(offset))
+            }
+        }
+    }
+
+    private func staticPropertyStorage(in demangledName: String,
+                                       ownerName: String) -> (name: String, type: String)? {
+        guard demangledName.hasPrefix("static ") else {
+            return nil
+        }
+        let ownerMarker = ".\(ownerName)."
+        guard let ownerRange = demangledName.range(of: ownerMarker),
+              let typeRange = demangledName.range(of: " : ", range: ownerRange.upperBound..<demangledName.endIndex) else {
+            return nil
+        }
+        let name = String(demangledName[ownerRange.upperBound..<typeRange.lowerBound])
+        guard !name.isEmpty, !name.contains("."), !name.contains("(") else {
+            return nil
+        }
+        return (name, String(demangledName[typeRange.upperBound...]))
+    }
+
+    private func isMutableStaticProperty(_ propertyName: String,
+                                         ownerName: String,
+                                         in symbols: [DemangledSymbol]) -> Bool {
+        let ownerMarker = ".\(ownerName).\(propertyName)."
+        return symbols.contains { item in
+            guard item.name.hasPrefix("static "), item.name.contains(ownerMarker) else {
+                return false
+            }
+            return item.name.contains(".setter : ") || item.name.contains(".modify : ")
+        }
+    }
+
+    private func staticPropertyValue(type: String,
+                                     storage: MachOSymbol,
+                                     machoFile: MachOFile) -> SDStaticPropertyValue {
+        let isConstantStorage = (storage.segmentName == "__TEXT" || storage.segmentName == "__DATA_CONST")
+            && storage.sectionName == "__const"
+        guard isConstantStorage else {
+            return .runtimeInitialized
+        }
+
+        let pointer = SDPointer(addr: storage.value)
+        switch type {
+        case "Bool":
+            guard let raw: UInt8 = machoFile.readValue(at: pointer), raw <= 1 else { return .unavailable }
+            return .literal(raw == 1 ? "true" : "false")
+        case "Int8":
+            guard let value: Int8 = machoFile.readValue(at: pointer) else { return .unavailable }
+            return .literal(String(value))
+        case "Int16":
+            guard let value: Int16 = machoFile.readValue(at: pointer) else { return .unavailable }
+            return .literal(String(value))
+        case "Int32":
+            guard let value: Int32 = machoFile.readValue(at: pointer) else { return .unavailable }
+            return .literal(String(value))
+        case "Int", "Int64":
+            guard let value: Int64 = machoFile.readValue(at: pointer) else { return .unavailable }
+            return .literal(String(value))
+        case "UInt8":
+            guard let value: UInt8 = machoFile.readValue(at: pointer) else { return .unavailable }
+            return .literal(String(value))
+        case "UInt16":
+            guard let value: UInt16 = machoFile.readValue(at: pointer) else { return .unavailable }
+            return .literal(String(value))
+        case "UInt32":
+            guard let value: UInt32 = machoFile.readValue(at: pointer) else { return .unavailable }
+            return .literal(String(value))
+        case "UInt", "UInt64":
+            guard let value: UInt64 = machoFile.readValue(at: pointer) else { return .unavailable }
+            return .literal(String(value))
+        case "Float":
+            guard let value: Float = machoFile.readValue(at: pointer) else { return .unavailable }
+            return .literal(String(value))
+        case "Double":
+            guard let value: Double = machoFile.readValue(at: pointer) else { return .unavailable }
+            return .literal(String(value))
+        default:
+            return .unavailable
+        }
+    }
+
+    private func collectStaticProperties(from symbols: [DemangledSymbol]) {
+        guard let machoFile = loader?.machoFile else {
+            return
+        }
+        let nominalNameCounts = Dictionary(grouping: nominalObjs, by: \.typeName)
+            .mapValues(\.count)
+
+        for obj in nominalObjs where nominalNameCounts[obj.typeName] == 1 {
+            var candidates: [String: StaticPropertyCandidate] = [:]
+            for item in symbols where item.symbol.isDefinedInSection {
+                guard let property = staticPropertyStorage(in: item.name, ownerName: obj.typeName) else {
+                    continue
+                }
+                candidates[property.name] = StaticPropertyCandidate(
+                    name: property.name,
+                    type: property.type,
+                    storage: item.symbol
+                )
+            }
+            obj.staticProperties = candidates.values.map { candidate in
+                let isVar = isMutableStaticProperty(candidate.name,
+                                                    ownerName: obj.typeName,
+                                                    in: symbols)
+                return SDStaticPropertyObj(
+                    name: candidate.name,
+                    type: candidate.type,
+                    isVar: isVar,
+                    value: staticPropertyValue(type: candidate.type,
+                                               storage: candidate.storage,
+                                               machoFile: machoFile)
+                )
+            }.sorted { $0.name < $1.name }
+        }
+    }
+
+    private func collectCallables(from symbols: [DemangledSymbol]) {
+        guard let machoFile = loader?.machoFile, !symbols.isEmpty else {
             return
         }
 
@@ -576,21 +788,20 @@ final class SDParser {
         let protocolNameCounts = Dictionary(grouping: protocolObjs, by: \.name)
             .mapValues(\.count)
 
-        for symbol in machoFile.symbols where symbol.isDefinedInSection
-            && symbol.segmentName == "__TEXT"
-            && symbol.sectionName == "__text"
-            && symbol.value != 0 {
-            guard let demangled = runtimeGetDemangledSymbol(symbol.name) else {
-                continue
-            }
-            let address = machoFile.fileOffset(forVMAddress: symbol.value) ?? symbol.value
+        for item in symbols where item.symbol.isDefinedInSection
+            && item.symbol.segmentName == "__TEXT"
+            && item.symbol.sectionName == "__text"
+            && item.symbol.value != 0 {
+            let demangled = item.name
+            let address = machoFile.fileOffset(forVMAddress: item.symbol.value) ?? item.symbol.value
 
             if let owner = nominalObjs.first(where: {
                 nominalNameCounts[$0.typeName] == 1
                     && demangled.contains(".\($0.typeName).")
             }), let callable = callable(from: demangled,
                                         ownerName: owner.typeName,
-                                        storedFieldNames: Set(owner.fields.map(\.name)),
+                                        storedFieldNames: Set(owner.fields.map(\.name))
+                                            .union(owner.staticProperties.map(\.name)),
                                         address: address) {
                 appendCallable(callable, to: &owner.callables)
                 continue
@@ -627,7 +838,10 @@ final class SDParser {
 
 
     func dumpAll() {
-        collectCallables()
+        let symbols = collectDemangledSymbols()
+        collectFieldOffsets(from: symbols)
+        collectStaticProperties(from: symbols)
+        collectCallables(from: symbols)
 
         for obj in self.protocolObjs {
             let protoName: String = obj.name;
