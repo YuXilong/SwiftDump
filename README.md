@@ -36,7 +36,7 @@ chmod +x SwiftDump
 
 将 `shasum` 输出与 `SHA256SUMS` 中对应条目比对后再运行。
 
-> 发布二进制使用 linker ad hoc signature，尚未经过 Apple notarization。如果文件带有浏览器下载隔离属性，macOS 可能要求你在“系统设置 → 隐私与安全性”中确认运行。
+> 发布二进制使用 ad hoc signature，尚未经过 Apple notarization。如果文件带有浏览器下载隔离属性，macOS 可能要求你在“系统设置 → 隐私与安全性”中确认运行。
 
 ## 功能
 
@@ -66,7 +66,7 @@ RxSwift.Queue<(eventTime: Foundation.Date, event: RxSwift.Event<A.RxSwift.Observ
 | macOS 部署目标 | macOS 10.13+ |
 | chained fixups | 常见 userland pointer formats；不包含 kernel/shared-cache formats 或 PAC 验签 |
 | Swift 函数签名 | 未剥离的 `LC_SYMTAB` 可恢复；完全 strip 后安全退化为类型/字段输出 |
-| 发布签名 | linker ad hoc signature，尚未 Apple notarization |
+| 发布签名 | ad hoc signature，尚未 Apple notarization |
 
 ## 使用方法
 

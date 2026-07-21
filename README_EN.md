@@ -34,7 +34,7 @@ chmod +x SwiftDump
 
 Compare the `shasum` output with the corresponding entry in `SHA256SUMS` before running the binary.
 
-> The release binary has a linker ad hoc signature and is not Apple-notarized. macOS may require confirmation under System Settings → Privacy & Security when the archive carries a browser quarantine attribute.
+> The release binary has an ad hoc signature and is not Apple-notarized. macOS may require confirmation under System Settings → Privacy & Security when the archive carries a browser quarantine attribute.
 
 ## Features
 
@@ -64,7 +64,7 @@ RxSwift.Queue<(eventTime: Foundation.Date, event: RxSwift.Event<A.RxSwift.Observ
 | Deployment target | macOS 10.13+ |
 | Chained fixups | Common userland pointer formats; no kernel/shared-cache formats or PAC validation |
 | Swift function signatures | Recoverable from an unstripped `LC_SYMTAB`; safely degrades to types and fields after a full strip |
-| Release signature | Linker ad hoc signature; not Apple-notarized |
+| Release signature | Ad hoc signature; not Apple-notarized |
 
 ## Usage
 
