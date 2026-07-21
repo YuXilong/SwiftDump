@@ -431,8 +431,203 @@ final class SDParser {
 
     }
 
+    private let ignoredCallablePrefixes = [
+        "method descriptor for ",
+        "dispatch thunk of ",
+        "protocol witness for ",
+        "outlined ",
+        "closure #",
+        "suspend resume partial function for ",
+        "async function pointer to ",
+        "vtable thunk for ",
+        "reabstraction thunk helper from ",
+        "partial apply forwarder for ",
+        "merged ",
+        "key path getter for ",
+        "variable initialization expression of ",
+        "default argument ",
+    ]
+
+    private func callable(from demangledName: String,
+                          ownerName: String,
+                          storedFieldNames: Set<String>,
+                          address: UInt64) -> SDCallableObj? {
+        guard !ignoredCallablePrefixes.contains(where: demangledName.hasPrefix),
+              !demangledName.contains(" in conformance ") else {
+            return nil
+        }
+
+        let ownerMarker = ".\(ownerName)."
+        guard let ownerRange = demangledName.range(of: ownerMarker) else {
+            return nil
+        }
+
+        let contextPrefix = String(demangledName[..<ownerRange.lowerBound])
+        let isStatic = contextPrefix.split(separator: " ").contains("static")
+        let isClass = contextPrefix.split(separator: " ").contains("class")
+        let isObjC = contextPrefix.split(separator: " ").contains("@objc")
+        guard let qualifiedContext = contextPrefix.split(separator: " ").last else {
+            return nil
+        }
+        let moduleName = qualifiedContext.split(separator: ".").first.map(String.init) ?? ""
+
+        var signature = String(demangledName[ownerRange.upperBound...])
+        if !moduleName.isEmpty {
+            signature = signature.replacingOccurrences(of: moduleName + ".", with: "")
+        }
+        guard !signature.contains(" in ") else {
+            return nil
+        }
+
+        if signature == "__deallocating_deinit" {
+            return SDCallableObj(kind: .deinitializer,
+                                 name: "deinit",
+                                 declaration: "deinit",
+                                 address: address)
+        }
+
+        let accessorKinds: [(marker: String, kind: SDCallableKind, keyword: String)] = [
+            (".getter : ", .getter, "get"),
+            (".setter : ", .setter, "set"),
+            (".read : ", .readAccessor, "read"),
+            (".modify : ", .modifyAccessor, "modify"),
+        ]
+        for accessor in accessorKinds {
+            guard let markerRange = signature.range(of: accessor.marker) else {
+                continue
+            }
+            let propertyName = String(signature[..<markerRange.lowerBound])
+            guard !propertyName.isEmpty,
+                  !propertyName.hasPrefix("__"),
+                  !storedFieldNames.contains(propertyName) else {
+                return nil
+            }
+            let propertyType = String(signature[markerRange.upperBound...])
+            let declaration = "var \(propertyName): \(propertyType) { \(accessor.keyword) }"
+            return SDCallableObj(kind: accessor.kind,
+                                 name: propertyName,
+                                 declaration: declaration,
+                                 address: address)
+        }
+
+        if signature.hasPrefix("init(") {
+            if let resultRange = signature.range(of: " -> ", options: .backwards) {
+                signature = String(signature[..<resultRange.lowerBound])
+            }
+            let declaration = (isObjC ? "@objc " : "") + signature
+            return SDCallableObj(kind: .initializer,
+                                 name: "init",
+                                 declaration: declaration,
+                                 address: address)
+        }
+
+        guard signature.contains("("),
+              !signature.hasPrefix("$"),
+              !signature.hasPrefix("__") else {
+            return nil
+        }
+        signature = signature.replacingOccurrences(of: " infix(", with: "(")
+        if signature.hasSuffix(" -> ()") {
+            signature.removeLast(" -> ()".count)
+        }
+        let callableName = String(signature.prefix { $0 != "(" && $0 != "<" })
+        guard !callableName.isEmpty else {
+            return nil
+        }
+        let callablePrefix: String
+        if isStatic {
+            callablePrefix = "static "
+        } else if isClass {
+            callablePrefix = "class "
+        } else {
+            callablePrefix = ""
+        }
+        var declaration = callablePrefix + "func " + signature
+        if isObjC {
+            declaration = "@objc " + declaration
+        }
+        return SDCallableObj(kind: .method,
+                             name: callableName,
+                             declaration: declaration,
+                             address: address)
+    }
+
+    private func appendCallable(_ callable: SDCallableObj, to callables: inout [SDCallableObj]) {
+        guard !callables.contains(where: { $0.identity == callable.identity }) else {
+            return
+        }
+        callables.append(callable)
+    }
+
+    private func collectCallables() {
+        guard let machoFile = loader?.machoFile, !machoFile.symbols.isEmpty else {
+            return
+        }
+
+        for obj in nominalObjs {
+            obj.callables.removeAll(keepingCapacity: true)
+        }
+        for obj in protocolObjs {
+            obj.callables.removeAll(keepingCapacity: true)
+        }
+
+        let nominalNameCounts = Dictionary(grouping: nominalObjs, by: \.typeName)
+            .mapValues(\.count)
+        let protocolNameCounts = Dictionary(grouping: protocolObjs, by: \.name)
+            .mapValues(\.count)
+
+        for symbol in machoFile.symbols where symbol.isDefinedInSection
+            && symbol.segmentName == "__TEXT"
+            && symbol.sectionName == "__text"
+            && symbol.value != 0 {
+            guard let demangled = runtimeGetDemangledSymbol(symbol.name) else {
+                continue
+            }
+            let address = machoFile.fileOffset(forVMAddress: symbol.value) ?? symbol.value
+
+            if let owner = nominalObjs.first(where: {
+                nominalNameCounts[$0.typeName] == 1
+                    && demangled.contains(".\($0.typeName).")
+            }), let callable = callable(from: demangled,
+                                        ownerName: owner.typeName,
+                                        storedFieldNames: Set(owner.fields.map(\.name)),
+                                        address: address) {
+                appendCallable(callable, to: &owner.callables)
+                continue
+            }
+
+            if let owner = protocolObjs.first(where: {
+                protocolNameCounts[$0.name] == 1
+                    && demangled.contains(".\($0.name).")
+            }), let callable = callable(from: demangled,
+                                        ownerName: owner.name,
+                                        storedFieldNames: [],
+                                        address: address) {
+                appendCallable(callable, to: &owner.callables)
+            }
+        }
+
+        for obj in nominalObjs {
+            obj.callables.sort { lhs, rhs in
+                if lhs.address == rhs.address {
+                    return lhs.declaration < rhs.declaration
+                }
+                return lhs.address < rhs.address
+            }
+        }
+        for obj in protocolObjs {
+            obj.callables.sort { lhs, rhs in
+                if lhs.address == rhs.address {
+                    return lhs.declaration < rhs.declaration
+                }
+                return lhs.address < rhs.address
+            }
+        }
+    }
+
 
     func dumpAll() {
+        collectCallables()
 
         for obj in self.protocolObjs {
             let protoName: String = obj.name;

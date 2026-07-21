@@ -19,11 +19,38 @@ final class SDNominalObjField {
     var typePtr: SDPointer = SDPointer(addr: 0)
 }
 
+enum SDCallableKind {
+    case method
+    case initializer
+    case deinitializer
+    case getter
+    case setter
+    case readAccessor
+    case modifyAccessor
+}
+
+struct SDCallableObj {
+    let kind: SDCallableKind
+    let name: String
+    let declaration: String
+    let address: UInt64
+
+    var identity: String {
+        declaration.removingPrefix("@objc ")
+    }
+
+    var dumpDefine: String {
+        let intent = "    "
+        return intent + "// Function at \(address.hex)\n" + intent + declaration + "\n"
+    }
+}
+
 final class SDNominalObj {
     
     var typeName: String = ""; // type name
     var contextDescriptorFlag: SDContextDescriptorFlags = SDContextDescriptorFlags(0); // default
     var fields: [SDNominalObjField] = [];
+    var callables: [SDCallableObj] = []
     
     var mangledTypeName: String = ""; // if someone else define this type as property, you can use this to retrive the name
     var nominalOffset: Int64 = 0; // Context Descriptor offset
@@ -71,6 +98,13 @@ final class SDNominalObj {
                 fs += "\(modifier) \(field.name): \(field.type);\n";
             }
             str += fs;
+        }
+
+        if !fields.isEmpty && !callables.isEmpty {
+            str += "\n"
+        }
+        for callable in callables {
+            str += callable.dumpDefine
         }
         
         str += "}\n";

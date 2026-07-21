@@ -8,7 +8,11 @@ DEMO_BIN="$ROOT_DIR/Demo/test"
 DEMO_OUTPUT="$BUILD_DIR/demo.output.txt"
 SURFACE_FIXTURE_SRC="$ROOT_DIR/Tests/Fixtures/Swift6SurfaceRegression.swift"
 SURFACE_FIXTURE_BIN="$BUILD_DIR/Swift6SurfaceRegression"
+SURFACE_STRIPPED_BIN="$BUILD_DIR/Swift6SurfaceRegression.stripped"
+SURFACE_TRUNCATED_BIN="$BUILD_DIR/Swift6SurfaceRegression.truncated"
 SURFACE_OUTPUT="$BUILD_DIR/swift6-surface.output.txt"
+SURFACE_STRIPPED_OUTPUT="$BUILD_DIR/swift6-surface-stripped.output.txt"
+SURFACE_TRUNCATED_OUTPUT="$BUILD_DIR/swift6-surface-truncated.output.txt"
 ACTOR_FIXTURE_SRC="$ROOT_DIR/Tests/Fixtures/Swift6ActorRegression.swift"
 ACTOR_FIXTURE_BIN="$BUILD_DIR/Swift6ActorRegression"
 ACTOR_OUTPUT="$BUILD_DIR/swift6-actor.output.txt"
@@ -62,11 +66,18 @@ if [[ ! -x "$SWIFTDUMP_BIN" ]]; then
     fail "SWIFTDUMP_BIN is not executable: $SWIFTDUMP_BIN"
 fi
 
-echo "[1/4] compiling Swift 6 fixtures with xcrun swiftc"
+echo "[1/6] compiling Swift 6 fixtures with xcrun swiftc"
 compile_fixture "$SURFACE_FIXTURE_SRC" "$SURFACE_FIXTURE_BIN"
 compile_fixture "$ACTOR_FIXTURE_SRC" "$ACTOR_FIXTURE_BIN"
+cp "$SURFACE_FIXTURE_BIN" "$SURFACE_STRIPPED_BIN"
+strip -x "$SURFACE_STRIPPED_BIN"
+surface_size="$(stat -f %z "$SURFACE_FIXTURE_BIN")"
+if (( surface_size <= 4096 )); then
+    fail "surface fixture is unexpectedly small: $surface_size"
+fi
+dd if="$SURFACE_FIXTURE_BIN" of="$SURFACE_TRUNCATED_BIN" bs=1 count="$((surface_size - 4096))" status=none
 
-echo "[2/4] verifying existing Demo/test regression"
+echo "[2/6] verifying existing Demo/test regression"
 "$SWIFTDUMP_BIN" -a x86_64 "$DEMO_BIN" > "$DEMO_OUTPUT"
 assert_not_contains "$DEMO_OUTPUT" "Fatal error"
 assert_contains "$DEMO_OUTPUT" "enum MyEnum"
@@ -75,7 +86,7 @@ assert_contains "$DEMO_OUTPUT" "var bbname: String;"
 assert_contains "$DEMO_OUTPUT" "class MyClass : BaseClass"
 assert_contains "$DEMO_OUTPUT" "var st: MyStruct?;"
 
-echo "[3/4] verifying Swift 6 surface regression fixture"
+echo "[3/6] verifying Swift 6 surface regression fixture"
 "$SWIFTDUMP_BIN" -a arm64 "$SURFACE_FIXTURE_BIN" > "$SURFACE_OUTPUT"
 assert_not_contains "$SURFACE_OUTPUT" "Fatal error"
 assert_not_contains "$SURFACE_OUTPUT" "Could not cast value"
@@ -91,18 +102,44 @@ assert_contains "$SURFACE_OUTPUT" "class ObjectiveCarrier : NSObject,ChildProtoc
 assert_contains "$SURFACE_OUTPUT" "let pair: (Int, String);"
 assert_contains "$SURFACE_OUTPUT" "let handler: @Sendable () async -> String;"
 assert_contains "$SURFACE_OUTPUT" "let failure: Error;"
+assert_contains "$SURFACE_OUTPUT" "var mutableText: String;"
 # Sendable is a marker protocol, so Swift reflection metadata erases
 # Sendable.Type to Any.Type even though function-type @Sendable is preserved.
 assert_contains "$SURFACE_OUTPUT" "let sendableType: Any.Type;"
 assert_contains "$SURFACE_OUTPUT" "let genericBox: GenericBox<String>;"
+assert_contains "$SURFACE_OUTPUT" "init(pair: (Int, String), handler: @Sendable () async -> String, failure: Error, sendableType: Sendable.Type, genericBox: GenericBox<String>)"
+assert_contains "$SURFACE_OUTPUT" "var computedSummary: String { get }"
+assert_contains "$SURFACE_OUTPUT" "var computedSummary: String { set }"
+assert_contains "$SURFACE_OUTPUT" "func rootRequirement(seed: Int) -> String"
+assert_contains "$SURFACE_OUTPUT" "func instanceMethod(box: GenericBox<String>, flag: Bool) async throws -> GenericBox<String>"
+assert_contains "$SURFACE_OUTPUT" "static func staticMethod(value: String) -> GenericBox<String>"
+assert_contains "$SURFACE_OUTPUT" "func genericMethod<A where A: Sendable>(value: A) -> A"
+assert_contains "$SURFACE_OUTPUT" "static func classMethod(code: Int) -> String"
+assert_contains "$SURFACE_OUTPUT" "static func main()"
 assert_not_contains "$SURFACE_OUTPUT" "So120x"
 
-echo "[4/4] verifying Swift 6 actor regression fixture"
+echo "[4/6] verifying stripped Swift 6 surface fixture degradation"
+"$SWIFTDUMP_BIN" -a arm64 "$SURFACE_STRIPPED_BIN" > "$SURFACE_STRIPPED_OUTPUT"
+assert_not_contains "$SURFACE_STRIPPED_OUTPUT" "Fatal error"
+assert_contains "$SURFACE_STRIPPED_OUTPUT" "class ObjectiveCarrier : NSObject,ChildProtocol,RootProtocol"
+assert_contains "$SURFACE_STRIPPED_OUTPUT" "let pair: (Int, String);"
+assert_contains "$SURFACE_STRIPPED_OUTPUT" "var mutableText: String;"
+
+echo "[5/6] verifying truncated symbol/string table degradation"
+"$SWIFTDUMP_BIN" -a arm64 "$SURFACE_TRUNCATED_BIN" > "$SURFACE_TRUNCATED_OUTPUT"
+assert_not_contains "$SURFACE_TRUNCATED_OUTPUT" "Fatal error"
+assert_contains "$SURFACE_TRUNCATED_OUTPUT" "class ObjectiveCarrier : NSObject,ChildProtocol,RootProtocol"
+assert_contains "$SURFACE_TRUNCATED_OUTPUT" "let pair: (Int, String);"
+assert_not_contains "$SURFACE_TRUNCATED_OUTPUT" "    // Function at "
+
+echo "[6/6] verifying Swift 6 actor regression fixture"
 if ! "$SWIFTDUMP_BIN" -a arm64 "$ACTOR_FIXTURE_BIN" > "$ACTOR_OUTPUT" 2> "$ACTOR_STDERR"; then
     fail "SwiftDump crashed or exited non-zero on actor fixture: $ACTOR_FIXTURE_BIN"
 fi
 assert_not_contains "$ACTOR_OUTPUT" "Fatal error"
 assert_contains "$ACTOR_OUTPUT" "actor StatusActor"
+assert_contains "$ACTOR_OUTPUT" "init(counter: Int)"
+assert_contains "$ACTOR_OUTPUT" "static func main()"
 assert_not_contains "$ACTOR_OUTPUT" "0xcffaedfe"
 
-echo "PASS: Demo regression and Swift 6 regression fixtures all succeeded."
+echo "PASS: Demo regression, Swift 6 function-signature regression, stripped-binary degradation, and truncated-symbol-table checks all succeeded."

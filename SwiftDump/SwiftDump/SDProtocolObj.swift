@@ -15,6 +15,7 @@ final class SDProtocolObj {
     var numRequirements: UInt32 = 0;
     var associatedTypeNames: String = ""; // joined by " "
     var descriptorOffset: UInt64 = 0
+    var callables: [SDCallableObj] = []
     
     var superProtocols:[String] = [];
     
@@ -29,6 +30,12 @@ final class SDProtocolObj {
         str += intent + "//flags \(flags.hex), numRequirements \(numRequirements)" + "\n"
         for astype in associatedTypeNames.split(separator: " ") {
             str += intent + "associatedtype " + String(astype) + "\n"
+        }
+        if !associatedTypeNames.isEmpty && !callables.isEmpty {
+            str += "\n"
+        }
+        for callable in callables {
+            str += callable.dumpDefine
         }
         
         str += "}\n"

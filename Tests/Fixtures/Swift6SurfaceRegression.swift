@@ -17,7 +17,9 @@ struct GenericBox<T> {
 typealias PairAlias = (Int, String)
 typealias AsyncSendableClosure = @Sendable () async -> String
 
-protocol RootProtocol {}
+protocol RootProtocol {
+    func rootRequirement(seed: Int) -> String
+}
 protocol ChildProtocol: RootProtocol {}
 
 enum FixtureError: Error {
@@ -30,6 +32,12 @@ final class ObjectiveCarrier: NSObject, ChildProtocol {
     let failure: any Error
     let sendableType: Sendable.Type
     let genericBox: GenericBox<String>
+    var mutableText: String
+
+    var computedSummary: String {
+        get { "\(pair.0)-\(mutableText)" }
+        set { mutableText = newValue }
+    }
 
     init(
         pair: PairAlias,
@@ -43,6 +51,30 @@ final class ObjectiveCarrier: NSObject, ChildProtocol {
         self.failure = failure
         self.sendableType = sendableType
         self.genericBox = genericBox
+        self.mutableText = genericBox.item
+    }
+
+    func rootRequirement(seed: Int) -> String {
+        "\(seed)-\(mutableText)"
+    }
+
+    func instanceMethod(box: GenericBox<String>, flag: Bool) async throws -> GenericBox<String> {
+        if flag {
+            return box
+        }
+        throw FixtureError.sample
+    }
+
+    static func staticMethod(value: String) -> GenericBox<String> {
+        GenericBox(item: value)
+    }
+
+    func genericMethod<T: Sendable>(value: T) -> T {
+        value
+    }
+
+    class func classMethod(code: Int) -> String {
+        "code-\(code)"
     }
 }
 
@@ -50,13 +82,23 @@ final class ObjectiveCarrier: NSObject, ChildProtocol {
 struct FixtureMain {
     static func main() {
         let closure: AsyncSendableClosure = { "done" }
-        _ = ObjectiveCarrier(
+        let carrier = ObjectiveCarrier(
             pair: (7, "swift"),
             handler: closure,
             failure: FixtureError.sample,
             sendableType: String.self,
             genericBox: GenericBox(item: "payload")
         )
+        carrier.computedSummary = "updated"
+        _ = carrier.computedSummary
+        _ = carrier.rootRequirement(seed: 3)
+        _ = ObjectiveCarrier.staticMethod(value: "factory")
+        _ = carrier.genericMethod(value: "generic")
+        _ = ObjectiveCarrier.classMethod(code: 9)
+        let task = Task {
+            _ = try? await carrier.instanceMethod(box: GenericBox(item: "async"), flag: true)
+        }
+        _ = task
         _ = PayloadlessColor.red
         _ = PayloadMessage.text("hello")
     }
