@@ -23,11 +23,42 @@
 //  neilwu modify this file for SwiftDump
 
 import Foundation
+import MachO
 
 enum MachOFileError: Error {
     case archFail
     case invalidMachO
     case truncated
+}
+
+public struct MachOSymbol {
+    let name: String
+    let value: UInt64
+    let type: UInt8
+    let section: UInt8
+    let descriptionFlags: UInt16
+    let segmentName: String?
+    let sectionName: String?
+
+    var symbolKind: UInt8 {
+        type & UInt8(N_TYPE)
+    }
+
+    var isExternal: Bool {
+        (type & UInt8(N_EXT)) != 0
+    }
+
+    var isPrivateExternal: Bool {
+        (type & UInt8(N_PEXT)) != 0
+    }
+
+    var isDefined: Bool {
+        isDefinedInSection || symbolKind == UInt8(N_ABS)
+    }
+
+    var isDefinedInSection: Bool {
+        symbolKind == UInt8(N_SECT)
+    }
 }
 
 public enum MachOCpuType:String, CaseIterable {
@@ -234,8 +265,9 @@ public struct MachOFile {
     
 	let url: URL
 	let header: MachOHeader
-	let commands: [MachOLoadCommandType]
+    let commands: [MachOLoadCommandType]
     let segments: [MachOLoadCommand.Segment]
+    let symbols: [MachOSymbol]
     let hasChainedFixups: Bool
     private let chainedFixups: MachOChainedFixups?
     
@@ -279,6 +311,10 @@ public struct MachOFile {
         self.header = header
 		self.commands = parsedCommands.commands
         self.segments = parsedCommands.segments
+        self.symbols = MachOFile.symbolTable(from: dataSlice,
+                                             header: header,
+                                             attributes: attributes,
+                                             segments: parsedCommands.segments)
         self.hasChainedFixups = parsedCommands.hasChainedFixups
         self.chainedFixups = MachOFile.chainedFixups(from: dataSlice,
                                                      header: header,
@@ -310,6 +346,170 @@ public struct MachOFile {
 			return MachOHeader(header: header)
 		}
 	}
+
+    private struct SymbolSectionIdentity {
+        let segmentName: String
+        let sectionName: String
+    }
+
+    private static func symbolTable(from data: Data,
+                                    header: MachOHeader,
+                                    attributes: MachAttributes,
+                                    segments: [MachOLoadCommand.Segment]) -> [MachOSymbol] {
+        guard let symtab = symtabCommand(from: data, header: header, attributes: attributes) else {
+            return []
+        }
+
+        let symbolSize = attributes.is64Bit ? MemoryLayout<nlist_64>.size : MemoryLayout<nlist>.size
+        let symbolBytesInfo = Int(symtab.nsyms).multipliedReportingOverflow(by: symbolSize)
+        guard symbolSize > 0,
+              let symbolCount = Int(exactly: symtab.nsyms),
+              symbolCount <= 1_000_000,
+              let symbolsOffset = Int(exactly: symtab.symoff),
+              let stringTableOffset = Int(exactly: symtab.stroff),
+              let stringTableSize = Int(exactly: symtab.strsize),
+              !symbolBytesInfo.overflow else {
+            return []
+        }
+        let symbolBytes = symbolBytesInfo.partialValue
+        guard data.hasReadableRange(offset: symbolsOffset,
+                                    length: symbolBytes),
+              data.hasReadableRange(offset: stringTableOffset,
+                                    length: stringTableSize) else {
+            return []
+        }
+
+        let sectionIdentities = segments.flatMap { segment in
+            segment.sections.map {
+                SymbolSectionIdentity(segmentName: segment.name, sectionName: $0.sectname)
+            }
+        }
+        var result: [MachOSymbol] = []
+        result.reserveCapacity(symbolCount)
+        for index in 0..<symbolCount {
+            let entryOffset = symbolsOffset + index * symbolSize
+            if attributes.is64Bit {
+                guard let rawEntry = data.extractOptional(nlist_64.self, offset: entryOffset),
+                      let symbol = makeSymbol(from64: rawEntry,
+                                              data: data,
+                                              sectionIdentities: sectionIdentities,
+                                              stringTableOffset: stringTableOffset,
+                                              stringTableSize: stringTableSize,
+                                              byteSwapped: attributes.isByteSwapped) else {
+                    continue
+                }
+                result.append(symbol)
+            } else {
+                guard let rawEntry = data.extractOptional(nlist.self, offset: entryOffset),
+                      let symbol = makeSymbol(from32: rawEntry,
+                                              data: data,
+                                              sectionIdentities: sectionIdentities,
+                                              stringTableOffset: stringTableOffset,
+                                              stringTableSize: stringTableSize,
+                                              byteSwapped: attributes.isByteSwapped) else {
+                    continue
+                }
+                result.append(symbol)
+            }
+        }
+        return result
+    }
+
+    private static func symtabCommand(from data: Data,
+                                      header: MachOHeader,
+                                      attributes: MachAttributes) -> symtab_command? {
+        var offset = header.size
+        for _ in 0..<header.loadCommandCount {
+            guard let loadCommand = MachOLoadCommand(data: data,
+                                                     offset: offset,
+                                                     byteSwapped: attributes.isByteSwapped),
+                  data.hasReadableRange(offset: offset, length: loadCommand.size) else {
+                return nil
+            }
+            defer { offset += loadCommand.size }
+            guard loadCommand.command == UInt32(LC_SYMTAB),
+                  var symtab = data.extractOptional(symtab_command.self, offset: offset) else {
+                continue
+            }
+            if attributes.isByteSwapped {
+                swap_symtab_command(&symtab, byteSwappedOrder)
+            }
+            return symtab
+        }
+        return nil
+    }
+
+    private static func makeSymbol(from64 rawEntry: nlist_64,
+                                   data: Data,
+                                   sectionIdentities: [SymbolSectionIdentity],
+                                   stringTableOffset: Int,
+                                   stringTableSize: Int,
+                                   byteSwapped: Bool) -> MachOSymbol? {
+        let stringIndex = byteSwapped ? rawEntry.n_un.n_strx.byteSwapped : rawEntry.n_un.n_strx
+        let value = byteSwapped ? rawEntry.n_value.byteSwapped : rawEntry.n_value
+        let rawDesc = rawEntry.n_desc
+        let desc = byteSwapped ? rawDesc.byteSwapped : rawDesc
+        let sectionIndex = Int(rawEntry.n_sect)
+        let identity = sectionIndex > 0 && sectionIndex <= sectionIdentities.count ? sectionIdentities[sectionIndex - 1] : nil
+        guard let name = readSymbolName(data: data,
+                                        stringTableOffset: stringTableOffset,
+                                        stringTableSize: stringTableSize,
+                                        stringIndex: stringIndex) else {
+            return nil
+        }
+        return MachOSymbol(name: name,
+                           value: value,
+                           type: rawEntry.n_type,
+                           section: rawEntry.n_sect,
+                           descriptionFlags: desc,
+                           segmentName: identity?.segmentName,
+                           sectionName: identity?.sectionName)
+    }
+
+    private static func makeSymbol(from32 rawEntry: nlist,
+                                   data: Data,
+                                   sectionIdentities: [SymbolSectionIdentity],
+                                   stringTableOffset: Int,
+                                   stringTableSize: Int,
+                                   byteSwapped: Bool) -> MachOSymbol? {
+        let stringIndex = byteSwapped ? rawEntry.n_un.n_strx.byteSwapped : rawEntry.n_un.n_strx
+        let value32 = byteSwapped ? rawEntry.n_value.byteSwapped : rawEntry.n_value
+        let rawDesc = UInt16(bitPattern: rawEntry.n_desc)
+        let desc = byteSwapped ? rawDesc.byteSwapped : rawDesc
+        let sectionIndex = Int(rawEntry.n_sect)
+        let identity = sectionIndex > 0 && sectionIndex <= sectionIdentities.count ? sectionIdentities[sectionIndex - 1] : nil
+        guard let name = readSymbolName(data: data,
+                                        stringTableOffset: stringTableOffset,
+                                        stringTableSize: stringTableSize,
+                                        stringIndex: stringIndex) else {
+            return nil
+        }
+        return MachOSymbol(name: name,
+                           value: UInt64(value32),
+                           type: rawEntry.n_type,
+                           section: rawEntry.n_sect,
+                           descriptionFlags: desc,
+                           segmentName: identity?.segmentName,
+                           sectionName: identity?.sectionName)
+    }
+
+    private static func readSymbolName(data: Data,
+                                       stringTableOffset: Int,
+                                       stringTableSize: Int,
+                                       stringIndex: UInt32) -> String? {
+        guard stringIndex > 0 else {
+            return nil
+        }
+        guard let relativeOffset = Int(exactly: stringIndex) else {
+            return nil
+        }
+        guard relativeOffset >= 0, relativeOffset < stringTableSize else {
+            return nil
+        }
+        let remainingLength = stringTableSize - relativeOffset
+        return data.readCString(from: stringTableOffset + relativeOffset,
+                                maxLength: min(remainingLength, 1 << 20))
+    }
 	
 	private static func segmentCommands(from data: Data, header: MachOHeader, attributes: MachAttributes) -> (commands: [MachOLoadCommandType], segments: [MachOLoadCommand.Segment], hasChainedFixups: Bool) {
 		var segmentCommands: [MachOLoadCommandType] = []

@@ -89,6 +89,22 @@ func runtimeGetDemangledName(_ instr: String) -> String {
     return normalizeDemangledTypeName(demangled)
 }
 
+/// Demangles a complete Swift linker symbol. Mach-O's string table prefixes
+/// C-compatible symbols with an underscore, while the Swift runtime demangler
+/// expects the mangling to begin with `$s`, `$S`, `$e`, or `_T`.
+func runtimeGetDemangledSymbol(_ symbol: String) -> String? {
+    var mangledName = symbol
+    if mangledName.hasPrefix("_$") || mangledName.hasPrefix("__T") {
+        mangledName.removeFirst()
+    }
+    guard canDemangleFromRuntime(mangledName),
+          let demangled = runtimeCopyDemangledName(mangledName),
+          demangled != mangledName else {
+        return nil
+    }
+    return normalizeDemangledTypeName(demangled)
+}
+
 func getTypeFromMangledName(_ str: String) -> String {
     if str.isEmpty || str.hasPrefix("0x") {
         return str
