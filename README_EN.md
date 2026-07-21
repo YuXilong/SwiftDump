@@ -39,9 +39,10 @@ Compare the `shasum` output with the corresponding entry in `SHA256SUMS` before 
 ## Features
 
 - Recover Swift 5/6 `struct`, `class`, `actor`, `enum`, and `protocol` declarations.
-- Parse payload and payloadless enum cases, field mutability, and indirect-case flags.
+- Parse payload and payloadless enum cases, field mutability, and indirect-case flags. Stored-field declarations omit semicolons and include instance offsets when the ABI makes them recoverable.
 - Recover class inheritance, protocol inheritance, and conformances.
-- When Mach-O retains Swift symbols in `LC_SYMTAB`, recover initializers, instance/static methods, generic constraints, `async throws`, property accessors, and function addresses.
+- When Mach-O retains Swift symbols in `LC_SYMTAB`, recover initializers, instance/static methods, generic constraints, `async throws`, property accessors, and function addresses. Initializer entry addresses are listed immediately after the metadata access function.
+- Recover static-property declarations with storage symbols and safely print primitive numeric literals stored in constant sections.
 - Follow Swift 6.3.3 descriptor, conformance, and field-record ABI definitions.
 - Safely resolve signed relative and direct/indirect pointers.
 - Resolve common userland `LC_DYLD_CHAINED_FIXUPS` rebases and binds, including arm64e authenticated pointers.
@@ -64,6 +65,8 @@ RxSwift.Queue<(eventTime: Foundation.Date, event: RxSwift.Event<A.RxSwift.Observ
 | Deployment target | macOS 10.13+ |
 | Chained fixups | Common userland pointer formats; no kernel/shared-cache formats or PAC validation |
 | Swift function signatures | Recoverable from an unstripped `LC_SYMTAB`; safely degrades to types and fields after a full strip |
+| Field offsets | Fixed-layout struct metadata vectors and class `Wvd` globals are recoverable; generic, resilient, and runtime-initialized layouts are marked explicitly |
+| Static values | Only verified primitive numeric constants from unstripped storage symbols; initialization code is never executed |
 | Release signature | Ad hoc signature; not Apple-notarized |
 
 ## Usage
@@ -99,18 +102,29 @@ enum PayloadMessage {
     case count(Int)
 }
 
-actor StatusActor {
-    let counter: Int
+struct LicenseDevice {
+    // <0x10051, struct, isUnique, kindSpecificFlags 0x1>
+    // Access Function at 0x25c43c
+    // Init Function at 0x25d080
+    let id: String // runtime-dependent
+    let name: String // runtime-dependent
+    let activatedAt: Foundation.Date? // runtime-dependent
+    static let maximumActivations: Int = 5
+    static var serviceName: String // initialized at runtime
 
-    // Function at 0x1180
-    init(counter: Int)
+    init(id: String, name: String, activatedAt: Foundation.Date?)
+}
 
-    // Function at 0x1240
-    func update(value: Int) async throws -> Int
+struct FixedLayoutRecord {
+    let count: Int64 // 0x0
+    let enabled: Bool // 0x8
+    let code: UInt32 // 0xc
 }
 ```
 
 Function declaration completeness depends on the available input. SwiftDump prefers the Mach-O symbol table and uses the public Swift runtime demangler. Compiler-synthesized methods may also appear. If a release build removed local Swift symbols, SwiftDump does not guess parameter names or types that are absent from the ABI.
+
+`kindSpecificFlags 0x1` indicates singleton metadata initialization. Swift fills the final field offsets at runtime in that case. SwiftDump does not call target code, so it prints `runtime-dependent` instead of treating placeholder values in the on-disk metadata template as final offsets.
 
 ## Build from source
 
@@ -151,12 +165,14 @@ SWIFTDUMP_BIN=/tmp/SwiftDumpDerivedData/Build/Products/Release/SwiftDump \
   ./scripts/run_regression.sh
 ```
 
-Coverage includes the legacy Demo plus Swift 6 actors, generics, protocol inheritance, enum payloads, existentials, async `@Sendable` function types, initializers, instance/static methods, generic constraints, `async throws`, computed-property accessors, stripped-binary degradation, and modern chained fixups.
+Coverage includes the legacy Demo plus Swift 6 actors, generics, protocol inheritance, enum payloads, existentials, async `@Sendable` function types, initializers, instance/static methods, generic constraints, `async throws`, computed-property accessors, fixed-layout struct and class field offsets, static constants, stripped-binary degradation, and modern chained fixups.
 
 ## ABI boundaries
 
 - SwiftDump prints information recoverable from reflection metadata instead of guessing erased source syntax. Marker protocols may be erased; for example, `Sendable.Type` may be represented as `Any.Type`.
 - Complete function signatures primarily come from Swift mangled symbols in `LC_SYMTAB`. Class-vtable and protocol-requirement ABI records contain method categories, slots, or implementation addresses, but not complete names and types. Fully stripped binaries require dSYM/DWARF for further recovery.
+- Fixed-layout struct offsets come from the type-metadata field-offset vector, while class fields prefer `Wvd` direct-field-offset globals. Generic layouts, `metadataInitializationKind != 0`, missing symbols, and stripped binaries produce `runtime-dependent` or `offset unavailable`; SwiftDump never invokes metadata accessors.
+- Static properties are not part of field reflection metadata and are recoverable only when `LC_SYMTAB` retains their storage/accessor symbols. SwiftDump currently reads `Bool`, integer, and floating-point values from read-only constant sections. It does not decode `String` or reference storage, nor run lazy/runtime initializers.
 - Demangled output is canonicalized and does not guarantee preservation of source typealiases, default argument values, access control, or every `class func` versus `static func` spelling.
 - Chained-fixup support focuses on common userland pointer formats. Kernel/shared-cache formats and PAC validation are outside the current scope.
 - SwiftDump does not instantiate target types through reserved private Swift runtime entry points.

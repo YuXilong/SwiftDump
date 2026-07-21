@@ -41,9 +41,10 @@ chmod +x SwiftDump
 ## 功能
 
 - 恢复 Swift 5 / Swift 6 的 `struct`、`class`、`actor`、`enum` 和 `protocol` 定义。
-- 解析 payload / payloadless enum case，以及字段 `let` / `var`、`indirect case` 标志。
+- 解析 payload / payloadless enum case，以及字段 `let` / `var`、`indirect case` 标志；字段声明不带分号，并在 ABI 可确定时附带实例内偏移。
 - 恢复类继承、协议继承和协议遵循关系。
-- 在 Mach-O 保留 `LC_SYMTAB` Swift 符号时，恢复 `init`、实例/静态方法、泛型约束、`async throws`、属性 accessor 及函数地址。
+- 在 Mach-O 保留 `LC_SYMTAB` Swift 符号时，恢复 `init`、实例/静态方法、泛型约束、`async throws`、属性 accessor 及函数地址；`init` 入口地址紧跟 metadata access function 输出。
+- 恢复有存储符号的静态属性声明；对于常量区中的基础数值类型，可安全输出其字面量值。
 - 按 Swift 6.3.3 metadata ABI 解析 descriptor、conformance 和 field records。
 - 安全处理 signed relative pointer、direct / indirect pointer。
 - 支持现代 Mach-O `LC_DYLD_CHAINED_FIXUPS` userland rebase / bind，包括常见 arm64e authenticated pointer。
@@ -66,6 +67,8 @@ RxSwift.Queue<(eventTime: Foundation.Date, event: RxSwift.Event<A.RxSwift.Observ
 | macOS 部署目标 | macOS 10.13+ |
 | chained fixups | 常见 userland pointer formats；不包含 kernel/shared-cache formats 或 PAC 验签 |
 | Swift 函数签名 | 未剥离的 `LC_SYMTAB` 可恢复；完全 strip 后安全退化为类型/字段输出 |
+| 字段偏移 | 固定布局 struct metadata vector 与 class `Wvd` 可恢复；泛型、韧性或运行时初始化布局会明确标记 |
+| 静态属性值 | 仅恢复未剥离存储符号中可验证的基础数值常量；不执行初始化代码 |
 | 发布签名 | ad hoc signature，尚未 Apple notarization |
 
 ## 使用方法
@@ -103,18 +106,29 @@ enum PayloadMessage {
     case count(Int)
 }
 
-actor StatusActor {
-    let counter: Int
+struct LicenseDevice {
+    // <0x10051, struct, isUnique, kindSpecificFlags 0x1>
+    // Access Function at 0x25c43c
+    // Init Function at 0x25d080
+    let id: String // runtime-dependent
+    let name: String // runtime-dependent
+    let activatedAt: Foundation.Date? // runtime-dependent
+    static let maximumActivations: Int = 5
+    static var serviceName: String // initialized at runtime
 
-    // Function at 0x1180
-    init(counter: Int)
+    init(id: String, name: String, activatedAt: Foundation.Date?)
+}
 
-    // Function at 0x1240
-    func update(value: Int) async throws -> Int
+struct FixedLayoutRecord {
+    let count: Int64 // 0x0
+    let enabled: Bool // 0x8
+    let code: UInt32 // 0xc
 }
 ```
 
 函数声明来源会影响输出完整度：SwiftDump 优先读取 Mach-O 符号表并调用公开的 Swift runtime demangler。编译器生成的方法可能一同出现；如果发布构建已经移除本地 Swift 符号，SwiftDump 不会根据地址猜测不存在于 ABI 中的参数名或类型。
+
+`kindSpecificFlags 0x1` 表示该类型需要 singleton metadata initialization。此时最终字段偏移由 Swift runtime 填充；SwiftDump 不调用目标代码，因此输出 `runtime-dependent`，而不会把磁盘 metadata 模板中的占位值误报为真实偏移。
 
 ## 从源码构建
 
@@ -163,6 +177,8 @@ SWIFTDUMP_BIN=/tmp/SwiftDumpDerivedData/Build/Products/Release/SwiftDump \
 - existential 与 `Error`。
 - async `@Sendable` 函数类型。
 - `init`、实例/静态方法、泛型约束、`async throws` 与 computed-property accessor。
+- 固定布局 struct、class 字段偏移，动态布局和 stripped binary 的安全降级。
+- 静态基础数值常量与运行时初始化静态属性的区分。
 - `strip -x` 后不崩溃且继续恢复类型/字段。
 - 现代 chained fixups 与损坏输入安全性。
 
@@ -170,6 +186,8 @@ SWIFTDUMP_BIN=/tmp/SwiftDumpDerivedData/Build/Products/Release/SwiftDump \
 
 - SwiftDump 输出 metadata 中能够恢复的信息，不猜测已经被编译器擦除的源码语法。例如 marker protocol 可能在 field reflection metadata 中被擦除，`Sendable.Type` 可能只能恢复为 `Any.Type`。
 - 完整函数签名主要来自 `LC_SYMTAB` 中的 Swift mangled symbols。class vtable 和 protocol requirement ABI 只提供方法类别、槽位或实现地址，并不包含完整 name/type；完全 strip 的二进制需要 dSYM/DWARF 才可能进一步恢复。
+- 固定布局 struct 的字段偏移来自 type metadata field-offset vector，class 字段优先使用 `Wvd` direct-field-offset global。泛型布局、`metadataInitializationKind != 0`、缺失符号或 stripped binary 会输出 `runtime-dependent` / `offset unavailable`，不会执行 metadata accessor。
+- 静态属性不是 field reflection metadata 的组成部分，只能在 `LC_SYMTAB` 保留相应 storage/accessor 符号时恢复。当前只读取只读常量区中的 `Bool`、整数和浮点数；`String`、引用、lazy/运行时初始化值不会离线解码或执行初始化函数。
 - demangle 输出是规范化声明，不保证保留源码中的 typealias、默认参数值、访问控制，也无法可靠区分所有 `class func` 与 `static func` 源码写法。
 - chained fixups 当前聚焦常见 userland pointer formats，不实现 kernel/shared-cache formats 或 PAC 验签。
 - 不通过保留的私有 Swift 类型实例化入口加载目标类型，避免离线 dump 触发目标程序运行时行为。
