@@ -43,6 +43,7 @@ chmod +x SwiftDump
 - 恢复 Swift 5 / Swift 6 的 `struct`、`class`、`actor`、`enum` 和 `protocol` 定义。
 - 解析 payload / payloadless enum case，以及字段 `let` / `var`、`indirect case` 标志。
 - 恢复类继承、协议继承和协议遵循关系。
+- 在 Mach-O 保留 `LC_SYMTAB` Swift 符号时，恢复 `init`、实例/静态方法、泛型约束、`async throws`、属性 accessor 及函数地址。
 - 按 Swift 6.3.3 metadata ABI 解析 descriptor、conformance 和 field records。
 - 安全处理 signed relative pointer、direct / indirect pointer。
 - 支持现代 Mach-O `LC_DYLD_CHAINED_FIXUPS` userland rebase / bind，包括常见 arm64e authenticated pointer。
@@ -64,6 +65,7 @@ RxSwift.Queue<(eventTime: Foundation.Date, event: RxSwift.Event<A.RxSwift.Observ
 | 构建环境 | 已验证 Xcode 26.0.1 / Apple Swift 6.2 / Swift 6 language mode |
 | macOS 部署目标 | macOS 10.13+ |
 | chained fixups | 常见 userland pointer formats；不包含 kernel/shared-cache formats 或 PAC 验签 |
+| Swift 函数签名 | 未剥离的 `LC_SYMTAB` 可恢复；完全 strip 后安全退化为类型/字段输出 |
 | 发布签名 | linker ad hoc signature，尚未 Apple notarization |
 
 ## 使用方法
@@ -103,8 +105,16 @@ enum PayloadMessage {
 
 actor StatusActor {
     let counter: Int
+
+    // Function at 0x1180
+    init(counter: Int)
+
+    // Function at 0x1240
+    func update(value: Int) async throws -> Int
 }
 ```
+
+函数声明来源会影响输出完整度：SwiftDump 优先读取 Mach-O 符号表并调用公开的 Swift runtime demangler。编译器生成的方法可能一同出现；如果发布构建已经移除本地 Swift 符号，SwiftDump 不会根据地址猜测不存在于 ABI 中的参数名或类型。
 
 ## 从源码构建
 
@@ -152,11 +162,15 @@ SWIFTDUMP_BIN=/tmp/SwiftDumpDerivedData/Build/Products/Release/SwiftDump \
 - payload / payloadless enum。
 - existential 与 `Error`。
 - async `@Sendable` 函数类型。
+- `init`、实例/静态方法、泛型约束、`async throws` 与 computed-property accessor。
+- `strip -x` 后不崩溃且继续恢复类型/字段。
 - 现代 chained fixups 与损坏输入安全性。
 
 ## ABI 边界
 
 - SwiftDump 输出 metadata 中能够恢复的信息，不猜测已经被编译器擦除的源码语法。例如 marker protocol 可能在 field reflection metadata 中被擦除，`Sendable.Type` 可能只能恢复为 `Any.Type`。
+- 完整函数签名主要来自 `LC_SYMTAB` 中的 Swift mangled symbols。class vtable 和 protocol requirement ABI 只提供方法类别、槽位或实现地址，并不包含完整 name/type；完全 strip 的二进制需要 dSYM/DWARF 才可能进一步恢复。
+- demangle 输出是规范化声明，不保证保留源码中的 typealias、默认参数值、访问控制，也无法可靠区分所有 `class func` 与 `static func` 源码写法。
 - chained fixups 当前聚焦常见 userland pointer formats，不实现 kernel/shared-cache formats 或 PAC 验签。
 - 不通过保留的私有 Swift 类型实例化入口加载目标类型，避免离线 dump 触发目标程序运行时行为。
 
@@ -172,7 +186,8 @@ Doc/                       示例图片
 
 ## TODO
 
-- 导出 Swift 函数地址。
+- 支持可选 dSYM/DWARF 输入，增强 stripped binary 的函数恢复。
+- 解析 class vtable / protocol requirement trailing records，提供无符号时的方法类别与地址 fallback。
 - 扩展更多 chained pointer formats 与 metadata trailing objects。
 
 ## 参考与致谢
