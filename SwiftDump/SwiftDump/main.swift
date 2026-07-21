@@ -28,7 +28,7 @@ func runMain(file: String, cpu: MachOCpuType) {
     parser.dumpAll();
 }
 
-fileprivate let SDVersion: String = "1.2.1";
+fileprivate let SDVersion: String = "1.2.2";
 fileprivate let SDBuildTime: String = "2026-07-22";
 
 struct SwiftDump: ParsableCommand {

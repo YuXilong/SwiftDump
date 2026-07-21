@@ -124,10 +124,6 @@ struct FixtureMain {
         _ = LicenseDevice.timeoutSeconds
         _ = LicenseDevice.serviceName
         _ = FixedLayoutRecord(count: 7, enabled: true, code: 42)
-        let task = Task {
-            _ = try? await carrier.instanceMethod(box: GenericBox(item: "async"), flag: true)
-        }
-        _ = task
         _ = PayloadlessColor.red
         _ = PayloadMessage.text("hello")
     }

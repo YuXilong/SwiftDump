@@ -18,16 +18,16 @@ SwiftDump is a command-line tool that recovers Swift type declarations from Mach
 
 ## Download
 
-Download the latest build from [GitHub Releases](https://github.com/YuXilong/SwiftDump/releases). The current stable release is [SwiftDump v1.2.1](https://github.com/YuXilong/SwiftDump/releases/tag/v1.2.1).
+Download the latest build from [GitHub Releases](https://github.com/YuXilong/SwiftDump/releases). The current stable release is [SwiftDump v1.2.2](https://github.com/YuXilong/SwiftDump/releases/tag/v1.2.2).
 
 The release provides an arm64/x86_64 Universal CLI, documentation, license, build information, complete build and regression logs, and SHA-256 checksums.
 
 ```sh
-curl -LO https://github.com/YuXilong/SwiftDump/releases/download/v1.2.1/SwiftDump-v1.2.1-macos-universal.zip
-curl -LO https://github.com/YuXilong/SwiftDump/releases/download/v1.2.1/SHA256SUMS
-shasum -a 256 SwiftDump-v1.2.1-macos-universal.zip
-unzip SwiftDump-v1.2.1-macos-universal.zip
-cd SwiftDump-v1.2.1-macos-universal
+curl -LO https://github.com/YuXilong/SwiftDump/releases/download/v1.2.2/SwiftDump-v1.2.2-macos-universal.zip
+curl -LO https://github.com/YuXilong/SwiftDump/releases/download/v1.2.2/SHA256SUMS
+shasum -a 256 SwiftDump-v1.2.2-macos-universal.zip
+unzip SwiftDump-v1.2.2-macos-universal.zip
+cd SwiftDump-v1.2.2-macos-universal
 chmod +x SwiftDump
 ./SwiftDump --version
 ```
